@@ -70,6 +70,15 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                         "Upstream %s returned HTTP %s", tail, resp.status
                     )
                     return web.Response(status=resp.status)
+                if "json" not in resp.headers.get("Content-Type", ""):
+                    # A site relaunch serving HTML with 200 must not reach
+                    # the card as a "valid" response.
+                    _LOGGER.warning(
+                        "Upstream %s returned non-JSON content type %s",
+                        tail,
+                        resp.headers.get("Content-Type"),
+                    )
+                    return web.Response(status=502)
                 body = await resp.read()
         except (TimeoutError, ClientError) as err:
             _LOGGER.warning("Upstream request %s failed: %s", tail, err)

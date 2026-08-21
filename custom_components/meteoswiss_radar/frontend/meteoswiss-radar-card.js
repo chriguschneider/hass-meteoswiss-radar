@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.3.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -13,10 +13,13 @@ const TILE_URL =
 const ATTRIBUTION = "Source: MeteoSwiss &middot; &copy; swisstopo";
 
 const CACHE_SIZE = 130; // decoded frames kept in memory (LRU)
+const PATH_CACHE_SIZE = 130; // projected Path2D sets per view (LRU)
 const PREFETCH_AHEAD = 6; // frames fetched ahead of the playhead
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
+const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
 const COLOR_MEASUREMENT = "#90a4ae";
 const COLOR_FORECAST = "#ffb74d";
+const RADAR_OPACITY = 0.75;
 
 let leafletLoader = null;
 function loadLeaflet() {
@@ -83,9 +86,9 @@ function decodeContour(contour, grid) {
   return points;
 }
 
-/* One multi-polygon per intensity band; contour 0 of a shape is the outer
- * ring, later contours are holes (evenodd fill handles them). */
-function frameToPolygons(frame, L) {
+/* Decode a frame into view-independent geometry: one entry per intensity
+ * band, each shape an array of rings (ring 0 outer, later rings holes). */
+function decodeFrame(frame) {
   const c = frame.coords;
   const grid = {
     xMin: c.x_min,
@@ -95,18 +98,107 @@ function frameToPolygons(frame, L) {
     ySpan: c.y_max - c.y_min,
     yCount: c.y_count,
   };
-  return frame.areas.map((area) =>
-    L.polygon(
-      area.shapes.map((shape) => shape.map((ct) => decodeContour(ct, grid))),
-      {
-        stroke: false,
-        fillColor: `#${area.color}`,
-        fillOpacity: 0.75,
-        fillRule: "evenodd",
-        interactive: false,
+  return frame.areas.map((area) => ({
+    color: `#${area.color}`,
+    shapes: area.shapes.map((shape) =>
+      shape.map((ct) => decodeContour(ct, grid))
+    ),
+  }));
+}
+
+/* Canvas layer that caches projected Path2D sets per frame and view.
+ * Replaying a cached frame is one clearRect plus ~11 native fills — the
+ * Leaflet-polygon approach re-projected every vertex on each frame swap,
+ * which was the animation bottleneck on slow devices. */
+function makeRadarLayerClass(L) {
+  return L.Layer.extend({
+    initialize() {
+      this._pathCache = new Map(); // url -> [{color, path}]
+    },
+
+    onAdd(map) {
+      this._map = map;
+      this._canvas = L.DomUtil.create("canvas", "leaflet-zoom-hide");
+      this._canvas.style.pointerEvents = "none";
+      map.getPane("overlayPane").appendChild(this._canvas);
+      map.on("moveend zoomend resize viewreset", this._reset, this);
+      this._reset();
+      return this;
+    },
+
+    onRemove(map) {
+      map.off("moveend zoomend resize viewreset", this._reset, this);
+      L.DomUtil.remove(this._canvas);
+    },
+
+    setFrame(url, areas) {
+      this._url = url;
+      this._areas = areas;
+      this._redraw();
+    },
+
+    _viewKey() {
+      const o = this._map.getPixelOrigin();
+      return `${this._map.getZoom()}:${o.x}:${o.y}`;
+    },
+
+    _reset() {
+      const key = this._viewKey();
+      if (key !== this._key) {
+        this._key = key;
+        this._pathCache.clear(); // layer-point space changed
       }
-    )
-  );
+      const size = this._map.getSize();
+      if (this._canvas.width !== size.x) this._canvas.width = size.x;
+      if (this._canvas.height !== size.y) this._canvas.height = size.y;
+      this._origin = this._map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._origin);
+      this._redraw();
+    },
+
+    _getPaths(url, areas) {
+      let paths = this._pathCache.get(url);
+      if (paths) {
+        this._pathCache.delete(url);
+        this._pathCache.set(url, paths);
+        return paths;
+      }
+      const map = this._map;
+      paths = areas.map((area) => {
+        const path = new Path2D();
+        for (const shape of area.shapes) {
+          for (const ring of shape) {
+            for (let i = 0; i < ring.length; i++) {
+              const pt = map.latLngToLayerPoint(ring[i]);
+              if (i === 0) path.moveTo(pt.x, pt.y);
+              else path.lineTo(pt.x, pt.y);
+            }
+            path.closePath();
+          }
+        }
+        return { color: area.color, path };
+      });
+      this._pathCache.set(url, paths);
+      while (this._pathCache.size > PATH_CACHE_SIZE) {
+        this._pathCache.delete(this._pathCache.keys().next().value);
+      }
+      return paths;
+    },
+
+    _redraw() {
+      if (!this._canvas || !this._map) return;
+      const ctx = this._canvas.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+      if (!this._areas || !this._url) return;
+      ctx.setTransform(1, 0, 0, 1, -this._origin.x, -this._origin.y);
+      ctx.globalAlpha = RADAR_OPACITY;
+      for (const p of this._getPaths(this._url, this._areas)) {
+        ctx.fillStyle = p.color;
+        ctx.fill(p.path, "evenodd");
+      }
+    },
+  });
 }
 
 const HOUSE_ICON_SVG =
@@ -121,11 +213,13 @@ const PAUSE_SVG =
 class MeteoSwissRadarCard extends HTMLElement {
   constructor() {
     super();
-    this._cache = new Map(); // radar_url -> [L.polygon]
+    this._cache = new Map(); // radar_url -> decoded areas
     this._pending = new Map(); // radar_url -> Promise
     this._frames = [];
     this._frameIndex = 0;
     this._playing = false;
+    this._failStreak = 0;
+    this._dataReady = false;
     this._lastManifest404Refresh = 0;
   }
 
@@ -135,6 +229,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       zoom: 8,
       frame_duration: 300,
       frame_stride: 1,
+      autoplay: false,
+      legend: true,
       ...(config || {}),
     };
   }
@@ -147,7 +243,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   connectedCallback() {
     this._maybeInit();
     if (this._map) requestAnimationFrame(() => this._map.invalidateSize());
-    if (this._frames.length && !this._refreshTimer) this._startRefreshTimer();
+    if (this._initialized && !this._refreshTimer) this._startRefreshTimer();
   }
 
   disconnectedCallback() {
@@ -183,11 +279,18 @@ class MeteoSwissRadarCard extends HTMLElement {
     try {
       this._L = await loadLeaflet();
       this._createMap(this._L);
+    } catch (err) {
+      // Vendored asset missing/broken — not recoverable at runtime.
+      this._showError(err.message || String(err));
+      return;
+    }
+    try {
       await this._loadData();
     } catch (err) {
-      console.error("meteoswiss-radar-card:", err);
-      this._showError(err.message || String(err));
+      console.warn("meteoswiss-radar-card: initial data load failed:", err);
+      this._showBanner("Radar data is currently unavailable");
     }
+    this._startRefreshTimer();
   }
 
   _renderShell() {
@@ -198,20 +301,32 @@ class MeteoSwissRadarCard extends HTMLElement {
       <style>
         ha-card { overflow: hidden; }
         .wrap { position: relative; }
-        #map { height: ${height}px; width: 100%; background: #dddddd; }
+        #map {
+          height: ${height}px; width: 100%;
+          background: var(--card-background-color, #dddddd);
+        }
         #label {
           position: absolute; left: 8px; bottom: 8px; z-index: 1000;
-          background: rgba(255, 255, 255, 0.88); color: #333;
+          background: var(--card-background-color, rgba(255, 255, 255, 0.88));
+          color: var(--primary-text-color, #333);
           padding: 2px 8px; border-radius: 4px; font-size: 12px;
           font-family: var(--primary-font-family, sans-serif);
-          pointer-events: none;
+          opacity: 0.92; pointer-events: none;
         }
         #label[data-type="forecast"] {
-          background: rgba(255, 183, 77, 0.92); color: #4e342e;
+          background: ${COLOR_FORECAST}; color: #4e342e; opacity: 0.95;
+        }
+        #banner {
+          position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+          z-index: 1000; max-width: 90%;
+          background: var(--warning-color, #ffa600); color: #fff;
+          padding: 4px 12px; border-radius: 4px; font-size: 12px;
+          font-family: var(--primary-font-family, sans-serif);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); pointer-events: none;
         }
         #timebar { height: 4px; background: var(--divider-color, #e0e0e0); }
         #controls {
-          display: flex; align-items: center; gap: 10px; padding: 6px 12px 8px;
+          display: flex; align-items: center; gap: 10px; padding: 6px 12px 4px;
         }
         #play {
           display: flex; align-items: center; justify-content: center;
@@ -223,12 +338,32 @@ class MeteoSwissRadarCard extends HTMLElement {
           flex: 1; min-width: 0; height: 28px; margin: 0; cursor: pointer;
           accent-color: var(--primary-color, #03a9f4);
         }
+        #legend {
+          display: flex; align-items: flex-end; gap: 8px;
+          padding: 0 12px 8px;
+          font-family: var(--primary-font-family, sans-serif);
+        }
+        #cells { display: flex; flex: 1; }
+        #cells .cell { flex: 1; min-width: 0; }
+        #cells .cell i {
+          display: block; height: 8px; border-radius: 1px;
+        }
+        #cells .cell b {
+          display: block; font-weight: normal; font-size: 9px;
+          color: var(--secondary-text-color, #666); text-align: left;
+        }
+        #unit, #modehint {
+          flex: none; font-size: 9px;
+          color: var(--secondary-text-color, #666);
+        }
+        #modehint { color: var(--warning-color, #b26a00); }
         #error { padding: 16px; color: var(--error-color, #b71c1c); }
       </style>
       <ha-card>
         <div class="wrap">
           <div id="map"></div>
           <div id="label" hidden></div>
+          <div id="banner" hidden></div>
         </div>
         <div id="timebar"></div>
         <div id="controls" hidden>
@@ -236,14 +371,23 @@ class MeteoSwissRadarCard extends HTMLElement {
           <input id="slider" type="range" min="0" max="0" step="1" value="0"
                  aria-label="Radar timeline">
         </div>
+        <div id="legend" hidden>
+          <div id="cells"></div>
+          <span id="modehint" hidden>measurement only</span>
+          <span id="unit">mm/h</span>
+        </div>
         <div id="error" hidden></div>
       </ha-card>
     `;
     this._label = root.getElementById("label");
+    this._banner = root.getElementById("banner");
     this._timebar = root.getElementById("timebar");
     this._controls = root.getElementById("controls");
     this._playBtn = root.getElementById("play");
     this._slider = root.getElementById("slider");
+    this._legendEl = root.getElementById("legend");
+    this._cellsEl = root.getElementById("cells");
+    this._modeHint = root.getElementById("modehint");
     this._playBtn.addEventListener("click", () => this._togglePlay());
     this._slider.addEventListener("input", (ev) =>
       this._onScrub(Number(ev.target.value))
@@ -259,7 +403,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._map = L.map(container, {
       center,
       zoom: this._config.zoom,
-      preferCanvas: true,
       zoomSnap: 0.5,
     });
     L.tileLayer(TILE_URL, {
@@ -276,7 +419,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       }),
       interactive: false,
     }).addTo(this._map);
-    this._radarLayer = L.layerGroup().addTo(this._map);
+    const RadarLayer = makeRadarLayerClass(L);
+    this._radar = new RadarLayer().addTo(this._map);
 
     // The shadow-DOM stylesheet may finish loading after map creation; without
     // a recalc the tiles render misaligned.
@@ -289,12 +433,17 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   async _loadData() {
     await this._refreshManifest(true);
+    this._dataReady = true;
+    this._hideBanner();
     const idx = this._lastMeasurementIndex();
     await this._ensureFrame(this._frames[idx].url);
     this._showFrame(idx);
     this._prefetch(idx);
     this._controls.hidden = false;
-    this._startRefreshTimer();
+    if (this._config.autoplay && !this._autoplayStarted) {
+      this._autoplayStarted = true;
+      this._play();
+    }
   }
 
   async _refreshManifest(force) {
@@ -308,7 +457,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     const pictures = (animation.map_images && animation.map_images[0]
       ? animation.map_images[0].pictures
       : []) || [];
-    const frames = pictures
+    let frames = pictures
       .filter(
         (p) =>
           p.radar_url &&
@@ -324,6 +473,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       .sort((a, b) => a.ts - b.ts);
     if (!frames.length) throw new Error("no frames in animation.json");
 
+    frames = this._applyTimeSpan(frames);
+
     const prevTs = this._frames[this._frameIndex]
       ? this._frames[this._frameIndex].ts
       : null;
@@ -335,12 +486,59 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._timebar.style.background =
       `linear-gradient(to right, ${COLOR_MEASUREMENT} 0%, ${COLOR_MEASUREMENT} ${b}%, ` +
       `${COLOR_FORECAST} ${b}%, ${COLOR_FORECAST} 100%)`;
+    this._modeHint.hidden = measCount !== frames.length;
+    this._renderLegend(animation.legend);
 
     // Keep the playhead on the same moment across a manifest rollover.
     if (prevTs != null) {
       this._frameIndex = this._nearestIndexByTs(prevTs);
       this._slider.value = String(this._frameIndex);
     }
+  }
+
+  /* past_hours / forecast_hours config: trim the timeline around the most
+   * recent measurement. forecast_hours: 0 gives a measurement-only card. */
+  _applyTimeSpan(frames) {
+    const past = Number(this._config.past_hours);
+    const forecast = Number(this._config.forecast_hours);
+    const hasPast = Number.isFinite(past) && past >= 0;
+    const hasForecast = Number.isFinite(forecast) && forecast >= 0;
+    if (!hasPast && !hasForecast) return frames;
+    const lastMeas = frames.filter((f) => f.type === "measurement").pop();
+    const anchor = lastMeas ? lastMeas.ts : frames[frames.length - 1].ts;
+    const kept = frames.filter((f) => {
+      if (f.type === "measurement") {
+        return !hasPast || f.ts >= anchor - past * 3600;
+      }
+      return !hasForecast || f.ts <= anchor + forecast * 3600;
+    });
+    if (kept.length) return kept;
+    return lastMeas ? [lastMeas] : frames.slice(-1);
+  }
+
+  _renderLegend(legend) {
+    if (
+      this._config.legend === false ||
+      !Array.isArray(legend) ||
+      !legend.length
+    ) {
+      this._legendEl.hidden = true;
+      return;
+    }
+    const bands = [...legend].sort((a, b) => (a.min || 0) - (b.min || 0));
+    this._cellsEl.textContent = "";
+    for (const band of bands) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const chip = document.createElement("i");
+      chip.style.background = String(band.color);
+      const tick = document.createElement("b");
+      tick.textContent = String(band.min || 0);
+      cell.appendChild(chip);
+      cell.appendChild(tick);
+      this._cellsEl.appendChild(cell);
+    }
+    this._legendEl.hidden = false;
   }
 
   _lastMeasurementIndex() {
@@ -365,10 +563,18 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _startRefreshTimer() {
     if (this._refreshTimer) clearInterval(this._refreshTimer);
-    this._refreshTimer = setInterval(
-      () => this._refreshManifest(false).catch(() => {}),
-      REFRESH_INTERVAL_MS
-    );
+    this._refreshTimer = setInterval(async () => {
+      try {
+        if (this._dataReady) {
+          await this._refreshManifest(false);
+        } else {
+          await this._loadData(); // initial load failed — keep retrying
+        }
+      } catch (err) {
+        // Degraded state stays; next tick retries. Existing frames keep
+        // playing from cache even when the manifest refresh fails.
+      }
+    }, REFRESH_INTERVAL_MS);
   }
 
   _cacheGet(url) {
@@ -394,15 +600,22 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (pending) return pending;
     const p = this._api(url)
       .then((frame) => {
-        const polys = frameToPolygons(frame, this._L);
+        const areas = decodeFrame(frame);
         this._pending.delete(url);
-        this._cachePut(url, polys);
-        return polys;
+        this._cachePut(url, areas);
+        this._failStreak = 0;
+        if (this._dataReady) this._hideBanner();
+        return areas;
       })
       .catch((err) => {
         this._pending.delete(url);
+        this._failStreak += 1;
         // A vanished frame usually means the manifest rolled over upstream.
         if (this._is404(err)) this._refreshAfter404();
+        if (this._failStreak >= FAIL_STREAK_LIMIT) {
+          if (this._playing) this._pause();
+          this._showBanner("Radar frames unavailable — retrying");
+        }
         throw err;
       });
     this._pending.set(url, p);
@@ -457,8 +670,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!this._frames.length) return;
     const next = (this._frameIndex + this._strideN()) % this._frames.length;
     const f = this._frames[next];
-    const polys = this._cacheGet(f.url);
-    if (!polys) {
+    const areas = this._cacheGet(f.url);
+    if (!areas) {
       // Hold the current frame until the next one is decoded.
       this._ensureFrame(f.url).catch(() => {});
       return;
@@ -497,11 +710,10 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _showFrame(idx) {
     const f = this._frames[idx];
-    const polys = this._cacheGet(f.url);
-    if (!polys || !this._map) return;
+    const areas = this._cacheGet(f.url);
+    if (!areas || !this._radar) return;
     this._frameIndex = idx;
-    this._radarLayer.clearLayers();
-    for (const p of polys) p.addTo(this._radarLayer);
+    this._radar.setFrame(f.url, areas);
     this._slider.value = String(idx);
     this._label.textContent = `${
       f.type === "measurement" ? "Measurement" : "Forecast"
@@ -510,10 +722,16 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._label.hidden = false;
   }
 
-  /* ---------- misc ---------- */
+  /* ---------- status UI ---------- */
 
-  _api(path) {
-    return this._hass.callApi("GET", `${PROXY_BASE}/${path}`);
+  _showBanner(message) {
+    if (!this._banner) return;
+    this._banner.textContent = message;
+    this._banner.hidden = false;
+  }
+
+  _hideBanner() {
+    if (this._banner) this._banner.hidden = true;
   }
 
   _showError(message) {
@@ -522,6 +740,10 @@ class MeteoSwissRadarCard extends HTMLElement {
       el.textContent = `MeteoSwiss Radar: ${message}`;
       el.hidden = false;
     }
+  }
+
+  _api(path) {
+    return this._hass.callApi("GET", `${PROXY_BASE}/${path}`);
   }
 }
 

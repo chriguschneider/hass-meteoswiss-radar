@@ -4,11 +4,12 @@ MeteoSwiss precipitation radar for Home Assistant: a custom integration that
 proxies the MeteoSwiss app API (their endpoints send no CORS headers) and
 ships a Lovelace card rendering the radar on a swisstopo basemap with Leaflet.
 
-**Status: work in progress.** Current state: the card plays the full radar
-animation — ~12 h of measurement into ~28 h of INCA forecast — with
-play/pause, a scrubbing slider and a measurement/forecast label, centered on
-your home location. The frame list refreshes itself while the card is open.
-Legend and full configuration options are planned.
+**Status: work in progress.** The card plays the full radar animation —
+~12 h of measurement into ~28 h of INCA forecast — with play/pause, a
+scrubbing slider, a measurement/forecast label and an intensity legend,
+centered on your home location. The frame list refreshes itself while the
+card is open, and upstream breakage degrades to a clean banner instead of a
+broken card. Remaining before v1: HACS packaging.
 
 ## How it works
 
@@ -30,10 +31,19 @@ Legend and full configuration options are planned.
 type: custom:meteoswiss-radar-card
 ```
 
-Optional: `height` (px, default 400), `zoom` (default 8),
-`center` (`[lat, lon]`, default = home location), `frame_duration` (ms per
-animation frame, default 300), `frame_stride` (play every Nth frame,
-default 1 — raise on slow devices).
+### Options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `height` | `400` | Map height in px. |
+| `zoom` | `8` | Initial map zoom. |
+| `center` | home location | `[lat, lon]` map center; the house marker follows the home location regardless. |
+| `frame_duration` | `300` | Milliseconds per animation frame. |
+| `frame_stride` | `1` | Play every Nth frame — raise on slow devices. |
+| `past_hours` | full range | Hours of measurement history to keep on the timeline. |
+| `forecast_hours` | full range | Hours of forecast to keep; `0` gives a measurement-only card. |
+| `autoplay` | `false` | Start playing as soon as the card loads. |
+| `legend` | `true` | Show the intensity legend (mm/h) under the controls. |
 
 ## Attribution
 
