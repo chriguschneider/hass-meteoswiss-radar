@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.4.1";
+const CARD_VERSION = "0.4.2";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -142,20 +142,6 @@ function bandAtPoint(areas, lat, lng) {
     }
   }
   return null;
-}
-
-function relTime(ts) {
-  const diffMin = Math.round((ts * 1000 - Date.now()) / 60000);
-  const abs = Math.abs(diffMin);
-  if (abs < 1) return "now";
-  let span;
-  if (abs < 60) span = `${abs} min`;
-  else {
-    const h = Math.floor(abs / 60);
-    const m = abs % 60;
-    span = h < 10 && m ? `${h} h ${m} min` : `${h} h`;
-  }
-  return diffMin > 0 ? `in ${span}` : `${span} ago`;
 }
 
 function weekdayShort(ts) {
@@ -313,10 +299,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
     }
-    if (this._labelTicker) {
-      clearInterval(this._labelTicker);
-      this._labelTicker = null;
-    }
   }
 
   getCardSize() {
@@ -356,10 +338,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._showBanner("Radar data is currently unavailable");
     }
     this._startRefreshTimer();
-    if (this._config.large_label && !this._labelTicker) {
-      // Keep the relative time fresh while paused.
-      this._labelTicker = setInterval(() => this._updateLabel(), 60000);
-    }
   }
 
   _renderShell() {
@@ -1093,7 +1071,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       l1.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 6)} · ${f.timepoint}`;
       const l2 = document.createElement("div");
       l2.className = "l2";
-      l2.textContent = `${type} · ${relTime(f.ts)}`;
+      l2.textContent = type;
       this._label.appendChild(l1);
       this._label.appendChild(l2);
     } else {

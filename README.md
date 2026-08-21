@@ -48,7 +48,7 @@ type: custom:meteoswiss-radar-card
 | `rain_bars` | `true` | Bar timeline of the rain intensity at the home location (legend colors, bar height by legend band); the bar strip doubles as the scrubber. Loads every frame once in the background (~12 MB, browser-cached). |
 | `time_axis` | `true` | Hour ticks, 6-h labels, day labels and a red "now" marker under the timeline. |
 | `time_bubble` | `true` | Floating time chip that rides the playhead. |
-| `large_label` | `true` | Big date/time label on the map with relative time ("in 45 min"). |
+| `large_label` | `true` | Big date/time label on the map with a Measurement/Forecast line. |
 | `progress_bar` | `true` | Playhead dot and elapsed shading on the measurement/forecast bar. |
 
 ## Attribution
