@@ -4,9 +4,11 @@ MeteoSwiss precipitation radar for Home Assistant: a custom integration that
 proxies the MeteoSwiss app API (their endpoints send no CORS headers) and
 ships a Lovelace card rendering the radar on a swisstopo basemap with Leaflet.
 
-**Status: work in progress.** Current state: the card shows the latest
-measured radar frame centered on your home location. Animation (past
-measurement + INCA forecast), legend, and configuration options are planned.
+**Status: work in progress.** Current state: the card plays the full radar
+animation — ~12 h of measurement into ~28 h of INCA forecast — with
+play/pause, a scrubbing slider and a measurement/forecast label, centered on
+your home location. The frame list refreshes itself while the card is open.
+Legend and full configuration options are planned.
 
 ## How it works
 
@@ -29,7 +31,9 @@ type: custom:meteoswiss-radar-card
 ```
 
 Optional: `height` (px, default 400), `zoom` (default 8),
-`center` (`[lat, lon]`, default = home location).
+`center` (`[lat, lon]`, default = home location), `frame_duration` (ms per
+animation frame, default 300), `frame_stride` (play every Nth frame,
+default 1 — raise on slow devices).
 
 ## Attribution
 

@@ -27,7 +27,6 @@ from .const import (
     FRONTEND_URL_BASE,
     PROXY_URL,
     UPSTREAM_BASE,
-    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,6 +90,25 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         )
 
 
+class MeteoSwissRadarCardView(HomeAssistantView):
+    """Serve the card bundle with forced revalidation.
+
+    'no-cache' (revalidate, 304 when unchanged) instead of a static path:
+    an absent Cache-Control header would let browsers cache heuristically
+    and run a stale card for minutes after a deploy.
+    """
+
+    url = f"{FRONTEND_URL_BASE}/{CARD_FILENAME}"
+    name = "meteoswiss_radar:card"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.FileResponse:
+        return web.FileResponse(
+            Path(__file__).parent / "frontend" / CARD_FILENAME,
+            headers={"Cache-Control": "no-cache"},
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Register proxy view, static frontend path and the card resource once."""
     if hass.data.get(DOMAIN):
@@ -98,13 +116,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN] = True
 
     hass.http.register_view(MeteoSwissRadarProxyView(hass))
+    hass.http.register_view(MeteoSwissRadarCardView())
 
     frontend_dir = Path(__file__).parent / "frontend"
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(FRONTEND_URL_BASE, str(frontend_dir), cache_headers=True)]
+        [
+            # Vendored assets are immutable per release and stay cached.
+            StaticPathConfig(
+                f"{FRONTEND_URL_BASE}/vendor",
+                str(frontend_dir / "vendor"),
+                cache_headers=True,
+            ),
+        ]
     )
-    # Version query defeats browser caching across integration updates.
-    add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}?v={VERSION}")
+    add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
     return True
 
 
