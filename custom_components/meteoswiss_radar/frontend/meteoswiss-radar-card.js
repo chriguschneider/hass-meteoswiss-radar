@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.4.1";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -479,22 +479,30 @@ class MeteoSwissRadarCard extends HTMLElement {
           font-size: 9px; font-weight: 700; color: ${COLOR_NOW};
         }
         #legend {
-          display: flex; align-items: flex-end; gap: 8px;
-          padding: 4px 12px 8px;
+          position: absolute; top: 8px; right: 8px; z-index: 1000;
+          background: var(--card-background-color, #fff); opacity: 0.93;
+          border-radius: 6px; padding: 5px 7px;
           font-family: var(--primary-font-family, sans-serif);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+          pointer-events: none;
         }
-        #cells { display: flex; flex: 1; }
-        #cells .cell { flex: 1; min-width: 0; }
-        #cells .cell i { display: block; height: 8px; border-radius: 1px; }
-        #cells .cell b {
-          display: block; font-weight: normal; font-size: 9px;
-          color: var(--secondary-text-color, #666); text-align: left;
-        }
-        #unit, #modehint {
-          flex: none; font-size: 9px;
+        #legend .title {
+          font-size: 9px; text-align: right; margin-bottom: 2px;
           color: var(--secondary-text-color, #666);
         }
-        #modehint { color: var(--warning-color, #b26a00); }
+        #cells .cell { display: flex; align-items: center; gap: 5px; }
+        #cells .cell i {
+          display: block; width: 18px; height: 7px; border-radius: 1px;
+          margin: 1px 0;
+        }
+        #cells .cell b {
+          font-weight: normal; font-size: 9px;
+          color: var(--secondary-text-color, #666);
+        }
+        #modehint {
+          display: block; font-size: 9px; text-align: right; margin-top: 2px;
+          color: var(--warning-color, #b26a00);
+        }
         #error { padding: 16px; color: var(--error-color, #b71c1c); }
         [hidden] { display: none !important; }
       </style>
@@ -504,6 +512,11 @@ class MeteoSwissRadarCard extends HTMLElement {
           <div id="label" hidden></div>
           <div id="banner" hidden></div>
           <button id="play" aria-label="Play/Pause" hidden>${PLAY_SVG}</button>
+          <div id="legend" hidden>
+            <div class="title">mm/h</div>
+            <div id="cells"></div>
+            <span id="modehint" hidden>measurement only</span>
+          </div>
         </div>
         <div id="timebar">
           <div id="elapsed" hidden></div>
@@ -519,11 +532,6 @@ class MeteoSwissRadarCard extends HTMLElement {
           </div>
         </div>
         <div id="axisrow" hidden></div>
-        <div id="legend" hidden>
-          <div id="cells"></div>
-          <span id="modehint" hidden>measurement only</span>
-          <span id="unit">mm/h</span>
-        </div>
         <div id="error" hidden></div>
       </ha-card>
     `;
@@ -729,7 +737,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._legendEl.hidden = true;
       return;
     }
-    const bands = [...legend].sort((a, b) => (a.min || 0) - (b.min || 0));
+    const bands = [...legend].sort((a, b) => (b.min || 0) - (a.min || 0));
     this._cellsEl.textContent = "";
     for (const band of bands) {
       const cell = document.createElement("div");
