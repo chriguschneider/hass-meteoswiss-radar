@@ -38,11 +38,15 @@ These automations need Anthropic credentials the repo doesn't have yet:
 
 1. **Install the Claude GitHub App** on this repo (grants the action its
    permissions): <https://github.com/apps/claude>.
-2. **Add a repository secret** `ANTHROPIC_API_KEY` (Settings → Secrets and
-   variables → Actions), or swap the workflows to
-   `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
+2. **Generate a Claude Code OAuth token** (Claude subscription):
+   `claude setup-token`.
+3. **Add it as a repository secret** `CLAUDE_CODE_OAUTH_TOKEN`
+   (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`, or Settings → Secrets and
+   variables → Actions). To use an Anthropic API key instead, set
+   `ANTHROPIC_API_KEY` and switch the `with:` input back to
+   `anthropic_api_key`.
 
-Until the secret exists, the workflows run but the Claude step fails — no
+Until the secret exists, the workflows run but the Claude step fails and no
 changes are made. Everything else (issue picking, labelling) is harmless.
 
 ## Guardrails

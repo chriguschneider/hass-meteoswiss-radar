@@ -2,8 +2,8 @@ name: Claude (@mention)
 
 # Event-driven: someone writes "@claude ..." in an issue or PR comment, or an
 # issue is assigned. The model is chosen from the issue's labels (P1 -> Opus,
-# P3/good-first -> Haiku, else Sonnet). Requires the ANTHROPIC_API_KEY secret
-# (or swap for claude_code_oauth_token). See docs/AUTOMATION.md.
+# P3/good-first -> Haiku, else Sonnet). Requires the CLAUDE_CODE_OAUTH_TOKEN
+# secret (Claude subscription). See docs/AUTOMATION.md.
 
 on:
   issue_comment:
@@ -40,6 +40,6 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action reads the @claude comment as the task automatically.
           claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 20"
