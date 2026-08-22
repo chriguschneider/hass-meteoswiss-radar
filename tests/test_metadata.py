@@ -1,0 +1,65 @@
+"""Pure metadata tests: no Home Assistant required.
+
+Guards the "keep in sync" footgun called out in const.py: the version
+must be identical across manifest.json, const.py, hacs.json context and
+the card's CARD_VERSION. Also asserts the manifest carries the keys
+hassfest/HACS expect. Runs in milliseconds, stdlib only.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+COMPONENT = ROOT / "custom_components" / "meteoswiss_radar"
+
+
+def _manifest() -> dict:
+    return json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _const_version() -> str:
+    text = (COMPONENT / "const.py").read_text(encoding="utf-8")
+    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    assert match, "VERSION not found in const.py"
+    return match.group(1)
+
+
+def _card_version() -> str:
+    text = (COMPONENT / "frontend" / "meteoswiss-radar-card.js").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r'CARD_VERSION\s*=\s*"([^"]+)"', text)
+    assert match, "CARD_VERSION not found in the card"
+    return match.group(1)
+
+
+def test_versions_are_in_sync() -> None:
+    manifest_version = _manifest()["version"]
+    assert _const_version() == manifest_version
+    assert _card_version() == manifest_version
+
+
+def test_manifest_has_required_keys() -> None:
+    manifest = _manifest()
+    for key in (
+        "domain",
+        "name",
+        "codeowners",
+        "documentation",
+        "issue_tracker",
+        "version",
+        "config_flow",
+        "iot_class",
+    ):
+        assert key in manifest, f"manifest.json missing '{key}'"
+    assert manifest["domain"] == "meteoswiss_radar"
+
+
+def test_hacs_json_is_valid() -> None:
+    hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
+    assert hacs["name"]
+    # Minimum HA version must look like a real release string.
+    assert re.fullmatch(r"\d{4}\.\d+\.\d+", hacs["homeassistant"])
