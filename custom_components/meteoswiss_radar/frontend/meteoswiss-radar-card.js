@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.5.2";
+const CARD_VERSION = "0.5.3";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -235,6 +235,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       frame_stride: 1,
       autoplay: false,
       legend: true,
+      attribution: true,
       time_axis: true,
       large_label: true,
       progress_bar: true,
@@ -449,7 +450,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           </div>
         </div>
         <div id="axisrow" hidden></div>
-        <div id="attrib">${ATTRIBUTION}</div>
+        <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
         <div id="error" hidden></div>
       </ha-card>
     `;

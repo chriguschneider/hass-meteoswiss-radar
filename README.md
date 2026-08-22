@@ -44,7 +44,8 @@ type: custom:meteoswiss-radar-card
 | `past_hours` | full range | Hours of measurement history to keep on the timeline. |
 | `forecast_hours` | full range | Hours of forecast to keep; `0` gives a measurement-only card. |
 | `autoplay` | `false` | Start playing as soon as the card loads. |
-| `legend` | `true` | Show the intensity legend (mm/h) under the controls. |
+| `legend` | `true` | Show the intensity legend (mm/h) overlay on the map. |
+| `attribution` | `true` | Show the "Source: MeteoSwiss · © swisstopo" footer. The swisstopo basemap license requires attribution — disable only for private use at your own discretion. |
 | `time_axis` | `true` | Hour ticks, 6-h labels, day labels and a red "now" marker under the timeline. |
 | `large_label` | `true` | Big date/time label on the map with a Measurement/Forecast line. |
 | `progress_bar` | `true` | Playhead dot and elapsed shading on the measurement/forecast bar. |
