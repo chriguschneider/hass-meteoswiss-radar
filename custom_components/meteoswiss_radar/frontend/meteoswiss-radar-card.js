@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.2";
+const CARD_VERSION = "0.7.3";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -999,7 +999,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._label.appendChild(l1);
       this._label.appendChild(l2);
     } else {
-      this._label.textContent = `${type} · ${f.day} ${f.timepoint}`;
+      // Compact label: the chip color already tells measurement vs forecast.
+      this._label.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 6)} · ${f.timepoint}`;
     }
     this._label.dataset.type = f.type;
     this._label.hidden = false;
@@ -1118,37 +1119,15 @@ const EDITOR_SECTIONS = [
     ],
   },
   {
-    key: "timeline",
-    icon: "mdi:chart-timeline-variant",
-    title: "Timeline",
-    reset: ["past_hours", "forecast_hours", "time_axis"],
-    schema: [
-      {
-        type: "grid",
-        name: "",
-        schema: [
-          { name: "past_hours", selector: { number: { min: 0, max: 12, step: 1, mode: "box" } } },
-          { name: "forecast_hours", selector: { number: { min: 0, max: 33, step: 1, mode: "box" } } },
-        ],
-      },
-      { name: "time_axis", selector: { boolean: {} } },
-    ],
-  },
-  {
     key: "display",
     icon: "mdi:eye-outline",
     title: "Display",
-    reset: ["legend", "attribution", "large_label"],
-    schema: [
-      {
-        type: "grid",
-        name: "",
-        schema: [
-          { name: "legend", selector: { boolean: {} } },
-          { name: "attribution", selector: { boolean: {} } },
-          { name: "large_label", selector: { boolean: {} } },
-        ],
-      },
+    reset: ["legend", "attribution", "time_axis", "large_label"],
+    chips: [
+      { key: "legend", label: "Legend" },
+      { key: "attribution", label: "Attribution" },
+      { key: "time_axis", label: "Time labels" },
+      { key: "large_label", label: "Large label" },
     ],
   },
 ];
@@ -1226,6 +1205,17 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
       .msr-title { font-size: 14px; font-weight: 500; }
       .msr-summary { font-size: 12px; color: var(--secondary-text-color); }
       .msr-body { padding: 12px 8px 8px; }
+      .msr-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .msr-chip {
+        border: 1px solid var(--divider-color, #c3ccd1); border-radius: 16px;
+        padding: 7px 14px; font-size: 13px; cursor: pointer; user-select: none;
+        color: var(--primary-text-color, #333); background: transparent;
+        font-family: inherit; line-height: 1;
+      }
+      .msr-chip.on {
+        background: var(--primary-color, #03a9f4); color: #fff;
+        border-color: var(--primary-color, #03a9f4);
+      }
     `;
     this.appendChild(style);
 
@@ -1269,10 +1259,35 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
 
       const body = document.createElement("div");
       body.className = "msr-body";
-      body.appendChild(this._makeForm(def.schema));
+      body.appendChild(
+        def.chips ? this._makeChips(def) : this._makeForm(def.schema)
+      );
       panel.appendChild(body);
       this.appendChild(panel);
+      panel.expanded = true;
     }
+  }
+
+  _makeChips(def) {
+    if (!this._chipEls) this._chipEls = {};
+    const wrap = document.createElement("div");
+    wrap.className = "msr-chips";
+    for (const chip of def.chips) {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "msr-chip";
+      el.textContent = chip.label;
+      el.addEventListener("click", () => {
+        const config = { ...this._config };
+        const on = this._data()[chip.key] !== false;
+        if (on) config[chip.key] = false;
+        else delete config[chip.key]; // default is on
+        this._emit(config);
+      });
+      this._chipEls[chip.key] = el;
+      wrap.appendChild(el);
+    }
+    return wrap;
   }
 
   _updateForms() {
@@ -1291,20 +1306,19 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
           : "Autoplay off") +
       ` · ${data.frame_duration} ms` +
       (Number(data.frame_stride) > 1 ? ` · every ${data.frame_stride}. frame` : "");
-    const past = Number(data.past_hours);
-    const fc = Number(data.forecast_hours);
-    const timeline =
-      (Number.isFinite(past) || Number.isFinite(fc)
-        ? `−${Number.isFinite(past) ? past : "all"} h → +${Number.isFinite(fc) ? fc : "all"} h`
-        : "Full range") + (data.time_axis === false ? " · labels off" : " · labels on");
     const shown = [
       data.legend !== false && "legend",
       data.attribution !== false && "attribution",
+      data.time_axis !== false && "time labels",
       data.large_label !== false && "large label",
     ].filter(Boolean);
     this._summaryEls.playback.textContent = playback;
-    this._summaryEls.timeline.textContent = timeline;
     this._summaryEls.display.textContent = shown.length ? shown.join(" · ") : "minimal";
+    if (this._chipEls) {
+      for (const key of Object.keys(this._chipEls)) {
+        this._chipEls[key].classList.toggle("on", data[key] !== false);
+      }
+    }
   }
 }
 
