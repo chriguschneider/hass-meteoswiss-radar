@@ -3,7 +3,7 @@
 DOMAIN = "meteoswiss_radar"
 
 # Keep in sync with manifest.json and the card's CARD_VERSION.
-VERSION = "0.5.4"
+VERSION = "0.6.0"
 
 UPSTREAM_BASE = "https://www.meteoschweiz.admin.ch"
 

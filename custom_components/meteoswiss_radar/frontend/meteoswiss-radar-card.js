@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.5.4";
+const CARD_VERSION = "0.6.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -17,10 +17,7 @@ const PATH_CACHE_SIZE = 130; // projected Path2D sets per view (LRU)
 const PREFETCH_AHEAD = 6; // frames fetched ahead of the playhead
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
 const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
-const COLOR_MEASUREMENT = "#90a4ae";
-const COLOR_FORECAST = "#ffb74d";
-const COLOR_PLAYHEAD = "#0277bd";
-const COLOR_NOW = "#d32f2f";
+const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
 
 let leafletLoader = null;
@@ -238,7 +235,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       attribution: true,
       time_axis: true,
       large_label: true,
-      progress_bar: true,
       ...(config || {}),
     };
   }
@@ -338,26 +334,42 @@ class MeteoSwissRadarCard extends HTMLElement {
           font-family: var(--primary-font-family, sans-serif);
           box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); pointer-events: none;
         }
-        #timebar {
-          position: relative; height: ${c.progress_bar ? "7px" : "4px"};
-          background: var(--divider-color, #e0e0e0);
+        #timeline {
+          padding: 10px 12px 8px;
+          font-family: var(--primary-font-family, sans-serif);
         }
-        #elapsed {
+        #trackwrap { padding: 6px 0; cursor: pointer; touch-action: none; }
+        #track { position: relative; height: 6px; border-radius: 3px; }
+        #track .zone { position: absolute; top: 0; bottom: 0; }
+        #tmeas { left: 0; background: #78909c; opacity: 0.55; border-radius: 3px 0 0 3px; }
+        #tfc { right: 0; background: #4fc3f7; opacity: 0.35; border-radius: 0 3px 3px 0; }
+        #telapsed {
           position: absolute; left: 0; top: 0; bottom: 0; width: 0;
-          background: rgba(2, 60, 90, 0.30); pointer-events: none;
+          background: var(--primary-color, #03a9f4); border-radius: 3px;
         }
-        #tbdot {
-          position: absolute; top: 50%; width: 13px; height: 13px;
-          border-radius: 50%; background: #fff;
-          border: 3px solid ${COLOR_PLAYHEAD};
+        #tnow {
+          position: absolute; top: -4px; bottom: -4px; width: 2px;
+          background: #f44336; border-radius: 1px;
+        }
+        #knob {
+          position: absolute; top: 50%; left: 0; width: 16px; height: 16px;
+          border-radius: 50%; background: var(--primary-color, #03a9f4);
+          border: 2px solid #fff; box-sizing: border-box;
           transform: translate(-50%, -50%);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); pointer-events: none;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); pointer-events: none;
         }
-        #controls {
-          display: flex; align-items: center; gap: 10px;
-          padding: 8px 12px 4px;
+        #hoursrow { position: relative; height: 15px; margin-top: 4px; }
+        #hoursrow b {
+          position: absolute; transform: translateX(-50%);
+          font-size: 11px; font-weight: 400;
+          color: var(--secondary-text-color, #666); white-space: nowrap;
         }
-        
+        #datesrow { position: relative; height: 15px; }
+        #datesrow b {
+          position: absolute; transform: translateX(-50%);
+          font-size: 10.5px; font-weight: 700;
+          color: var(--primary-text-color, #333); white-space: nowrap;
+        }
         #play {
           position: absolute; right: 8px; bottom: 8px; z-index: 1000;
           display: flex; align-items: center; justify-content: center;
@@ -365,34 +377,6 @@ class MeteoSwissRadarCard extends HTMLElement {
           border: none; border-radius: 50%; cursor: pointer;
           background: var(--primary-color, #03a9f4); color: #fff;
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-        }
-        #sliderwrap { position: relative; flex: 1; min-width: 0; }
-        #slider {
-          width: 100%; height: 28px; margin: 0; cursor: pointer;
-          accent-color: var(--primary-color, #03a9f4); display: block;
-        }
-        #axisrow {
-          position: relative; height: 26px;
-          margin: 2px 12px 0 12px;
-          font-family: var(--primary-font-family, sans-serif);
-        }
-        #axisrow .tick {
-          position: absolute; top: 0; width: 1px; height: 5px;
-          background: var(--secondary-text-color, #9aa0a6);
-        }
-        #axisrow .tlab {
-          position: absolute; top: 5px; font-size: 9px;
-          color: var(--secondary-text-color, #5f6368);
-          transform: translateX(-50%);
-        }
-        #axisrow .dlab {
-          position: absolute; top: 15px; font-size: 9px; font-weight: 700;
-          color: var(--primary-text-color, #202124);
-          transform: translateX(-50%);
-        }
-        #axisrow .nowlab {
-          position: absolute; top: 15px; transform: translateX(-50%);
-          font-size: 9px; font-weight: 700; color: ${COLOR_NOW};
         }
         #legend {
           position: absolute; top: 8px; right: 8px; z-index: 1000;
@@ -444,36 +428,62 @@ class MeteoSwissRadarCard extends HTMLElement {
           </div>
           <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
         </div>
-        <div id="timebar">
-          <div id="elapsed" hidden></div>
-          <div id="tbdot" hidden></div>
-        </div>
-        <div id="controls" hidden>
-          <div id="sliderwrap">
-            <input id="slider" type="range" min="0" max="0" step="1" value="0"
-                   aria-label="Radar timeline">
+        <div id="timeline" hidden>
+          <div id="trackwrap">
+            <div id="track">
+              <div class="zone" id="tmeas"></div>
+              <div class="zone" id="tfc"></div>
+              <div id="telapsed"></div>
+              <div id="tnow" hidden></div>
+              <div id="knob"></div>
+            </div>
           </div>
+          <div id="hoursrow" ${c.time_axis ? "" : "hidden"}></div>
+          <div id="datesrow" ${c.time_axis ? "" : "hidden"}></div>
         </div>
-        <div id="axisrow" hidden></div>
         <div id="error" hidden></div>
       </ha-card>
     `;
     this._label = root.getElementById("label");
     this._banner = root.getElementById("banner");
-    this._timebar = root.getElementById("timebar");
-    this._elapsed = root.getElementById("elapsed");
-    this._tbDot = root.getElementById("tbdot");
-    this._controls = root.getElementById("controls");
+    this._timeline = root.getElementById("timeline");
+    this._trackWrap = root.getElementById("trackwrap");
+    this._tMeas = root.getElementById("tmeas");
+    this._tFc = root.getElementById("tfc");
+    this._tNow = root.getElementById("tnow");
+    this._tElapsed = root.getElementById("telapsed");
+    this._knob = root.getElementById("knob");
+    this._hoursRow = root.getElementById("hoursrow");
+    this._datesRow = root.getElementById("datesrow");
     this._playBtn = root.getElementById("play");
-    this._slider = root.getElementById("slider");
-    this._axisRow = root.getElementById("axisrow");
     this._legendEl = root.getElementById("legend");
     this._cellsEl = root.getElementById("cells");
     this._modeHint = root.getElementById("modehint");
     this._playBtn.addEventListener("click", () => this._togglePlay());
-    this._slider.addEventListener("input", (ev) =>
-      this._onScrub(Number(ev.target.value))
-    );
+    const scrubFromEvent = (ev) => {
+      const rect = this._trackWrap.getBoundingClientRect();
+      const frac = Math.min(
+        1,
+        Math.max(0, (ev.clientX - rect.left) / rect.width)
+      );
+      const idx = Math.round(frac * (this._frames.length - 1));
+      if (Number.isFinite(idx) && this._frames.length) this._onScrub(idx);
+    };
+    this._trackWrap.addEventListener("pointerdown", (ev) => {
+      try {
+        this._trackWrap.setPointerCapture(ev.pointerId);
+      } catch (e) {
+        // synthetic events carry no active pointer - scrubbing still works
+      }
+      this._trackScrubbing = true;
+      scrubFromEvent(ev);
+    });
+    this._trackWrap.addEventListener("pointermove", (ev) => {
+      if (this._trackScrubbing) scrubFromEvent(ev);
+    });
+    this._trackWrap.addEventListener("pointerup", () => {
+      this._trackScrubbing = false;
+    });
   }
 
   _createMap(L) {
@@ -523,7 +533,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     await this._ensureFrame(this._frames[idx].url);
     this._showFrame(idx);
     this._prefetch(idx);
-    this._controls.hidden = false;
+    this._timeline.hidden = false;
     this._playBtn.hidden = false;
     if (this._config.autoplay && !this._autoplayStarted) {
       this._autoplayStarted = true;
@@ -565,21 +575,21 @@ class MeteoSwissRadarCard extends HTMLElement {
       : null;
     this._animVersion = version;
     this._frames = frames;
-    this._slider.max = String(frames.length - 1);
     const measCount = frames.filter((f) => f.type === "measurement").length;
     this._measFraction = measCount / frames.length;
     const b = (this._measFraction * 100).toFixed(2);
-    this._timebar.style.background =
-      `linear-gradient(to right, ${COLOR_MEASUREMENT} 0%, ${COLOR_MEASUREMENT} ${b}%, ` +
-      `${COLOR_FORECAST} ${b}%, ${COLOR_FORECAST} 100%)`;
+    this._tMeas.style.width = b + "%";
+    this._tFc.style.width = (100 - Number(b)).toFixed(2) + "%";
+    this._tNow.style.left = b + "%";
+    this._tNow.hidden = measCount === frames.length;
     this._modeHint.hidden = measCount !== frames.length;
     this._renderLegend(animation.legend);
-    this._buildAxis();
+    this._buildTimelineLabels();
 
     // Keep the playhead on the same moment across a manifest rollover.
     if (prevTs != null) {
       this._frameIndex = this._nearestIndexByTs(prevTs);
-      this._slider.value = String(this._frameIndex);
+      this._moveMarkers(this._frameIndex);
     }
   }
 
@@ -628,52 +638,54 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._legendEl.hidden = false;
   }
 
-  /* Hour ticks (labels every 6 h), day labels below, red "now" marker at
-   * the measurement/forecast boundary. Fractions of the frame timeline. */
-  _buildAxis() {
-    if (!this._config.time_axis || this._frames.length < 2) {
-      this._axisRow.hidden = true;
-      return;
-    }
+  /* Hour labels every 6 h in one row, date labels centered within each
+   * day's visible span in the row below. */
+  _buildTimelineLabels() {
+    if (!this._config.time_axis || this._frames.length < 2) return;
     const frames = this._frames;
     const t0 = frames[0].ts;
     const t1 = frames[frames.length - 1].ts;
     const span = t1 - t0;
-    this._axisRow.textContent = "";
+    this._hoursRow.textContent = "";
+    this._datesRow.textContent = "";
     const firstHour = Math.ceil(t0 / 3600) * 3600;
     for (let t = firstHour; t <= t1; t += 3600) {
-      const x = ((t - t0) / span) * 100;
       const d = new Date(t * 1000);
-      const hour = d.getHours();
-      const tick = document.createElement("div");
-      tick.className = "tick";
-      tick.style.left = x + "%";
-      if (hour % 6 !== 0) tick.style.height = "3px";
-      this._axisRow.appendChild(tick);
-      if (hour % 6 === 0) {
-        const lab = document.createElement("div");
-        lab.className = "tlab";
-        lab.style.left = x + "%";
-        lab.textContent = String(hour).padStart(2, "0") + ":00";
-        this._axisRow.appendChild(lab);
-        if (hour === 0) {
-          const day = document.createElement("div");
-          day.className = "dlab";
-          day.style.left = x + "%";
-          day.textContent =
-            weekdayShort(t) + " " + String(d.getDate()).padStart(2, "0") + ".";
-          this._axisRow.appendChild(day);
-        }
-      }
+      if (d.getHours() % 6 !== 0) continue;
+      const x = ((t - t0) / span) * 100;
+      if (x < 3 || x > 97) continue; // avoid clipped edge labels
+      const b = document.createElement("b");
+      b.style.left = x + "%";
+      b.textContent = String(d.getHours()).padStart(2, "0") + ":00";
+      this._hoursRow.appendChild(b);
     }
-    const nowTs = frames[Math.round(this._measFraction * frames.length) - 1];
-    const nowX = this._measFraction * 100;
-    const nowLab = document.createElement("div");
-    nowLab.className = "nowlab";
-    nowLab.style.left = nowX + "%";
-    nowLab.textContent = "▲ now";
-    this._axisRow.appendChild(nowLab);
-    this._axisRow.hidden = false;
+    let t = t0;
+    while (t <= t1) {
+      const ds = new Date(t * 1000);
+      ds.setHours(0, 0, 0, 0);
+      const dayStart = ds.getTime() / 1000;
+      const dayEnd = dayStart + 86400;
+      const visStart = Math.max(dayStart, t0);
+      const visEnd = Math.min(dayEnd, t1);
+      const width = ((visEnd - visStart) / span) * 100;
+      if (width >= 4) {
+        const center = (((visStart + visEnd) / 2 - t0) / span) * 100;
+        const d = new Date(visStart * 1000);
+        const b = document.createElement("b");
+        b.style.left = center + "%";
+        b.textContent =
+          width < 12
+            ? weekdayShort(visStart)
+            : weekdayShort(visStart) +
+              " " +
+              String(d.getDate()).padStart(2, "0") +
+              "." +
+              String(d.getMonth() + 1).padStart(2, "0") +
+              ".";
+        this._datesRow.appendChild(b);
+      }
+      t = dayEnd;
+    }
   }
 
   _lastMeasurementIndex() {
@@ -853,20 +865,16 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._moveMarkers(idx);
   }
 
-  /* Slider, timebar progress and label for idx. */
+  /* Track fill, knob and label for idx. */
   _moveMarkers(idx) {
     const f = this._frames[idx];
     if (!f) return;
     this._frameIndex = idx;
-    this._slider.value = String(idx);
     this._updateLabel();
     const frac = this._frames.length > 1 ? idx / (this._frames.length - 1) : 0;
-    if (this._config.progress_bar) {
-      this._elapsed.style.width = (frac * 100).toFixed(2) + "%";
-      this._tbDot.style.left = (frac * 100).toFixed(2) + "%";
-      this._elapsed.hidden = false;
-      this._tbDot.hidden = false;
-    }
+    const pct = (frac * 100).toFixed(2) + "%";
+    this._tElapsed.style.width = pct;
+    this._knob.style.left = pct;
   }
 
   _updateLabel() {
