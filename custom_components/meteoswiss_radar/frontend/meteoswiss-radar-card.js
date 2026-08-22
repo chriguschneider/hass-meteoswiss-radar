@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.5";
+const CARD_VERSION = "0.7.6";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -1058,7 +1058,7 @@ const EDITOR_LABELS = {
   autoplay_mode: "Autoplay on open",
   play_past_hours: "Window: history (h)",
   play_forecast_hours: "Window: forecast (h)",
-  play_forecast_until: "Window: at least until (time)",
+  play_forecast_until: "Window: at least until (HH:MM, optional)",
   legend: "Legend",
   attribution: "Attribution",
   time_axis: "Time labels",
@@ -1090,6 +1090,43 @@ const BASICS_SCHEMA = [
   },
 ];
 
+const AUTOPLAY_FIELD = {
+  name: "autoplay_mode",
+  selector: {
+    select: {
+      mode: "dropdown",
+      options: [
+        { value: "off", label: "Off — start paused" },
+        { value: "window", label: "Window — play the configured range on open" },
+        { value: "full", label: "Full — play the whole timeline on open" },
+      ],
+    },
+  },
+};
+
+const WINDOW_GRID = {
+  type: "grid",
+  name: "",
+  schema: [
+    { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
+    { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
+  ],
+};
+
+const WINDOW_UNTIL_FIELD = {
+  name: "play_forecast_until",
+  selector: { text: {} },
+};
+
+const SPEED_GRID = {
+  type: "grid",
+  name: "",
+  schema: [
+    { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
+    { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
+  ],
+};
+
 const EDITOR_SECTIONS = [
   {
     key: "playback",
@@ -1104,31 +1141,12 @@ const EDITOR_SECTIONS = [
       "frame_stride",
       "autoplay",
     ],
-    schema: [
-      {
-        name: "autoplay_mode",
-        selector: {
-          select: {
-            mode: "dropdown",
-            options: [
-              { value: "off", label: "Off — start paused" },
-              { value: "window", label: "Window — play the configured range on open" },
-              { value: "full", label: "Full — play the whole timeline on open" },
-            ],
-          },
-        },
-      },
-      {
-        type: "grid",
-        name: "",
-        schema: [
-          { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
-          { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
-          { name: "play_forecast_until", selector: { time: { no_second: true } } },
-          { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
-          { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
-        ],
-      },
+    // Window bounds only make sense in window mode - the schema is
+    // rebuilt when the autoplay mode changes.
+    buildSchema: (data) => [
+      AUTOPLAY_FIELD,
+      ...(data.autoplay_mode === "window" ? [WINDOW_GRID, WINDOW_UNTIL_FIELD] : []),
+      SPEED_GRID,
     ],
   },
   {
@@ -1183,10 +1201,11 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     );
   }
 
-  _makeForm(schema) {
+  _makeForm(schema, def) {
     const form = document.createElement("ha-form");
     form.computeLabel = (item) => EDITOR_LABELS[item.name] || item.name;
-    form.schema = schema;
+    if (schema) form.schema = schema;
+    if (def) form._sectionDef = def;
     form.addEventListener("value-changed", (ev) => {
       // Every form is fed the full data object, so the emitted value is
       // the full config with this form's change applied.
@@ -1273,7 +1292,7 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
       const body = document.createElement("div");
       body.className = "msr-body";
       body.appendChild(
-        def.chips ? this._makeChips(def) : this._makeForm(def.schema)
+        def.chips ? this._makeChips(def) : this._makeForm(def.schema, def)
       );
       panel.appendChild(body);
       this.appendChild(panel);
@@ -1308,6 +1327,11 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     const data = this._data();
     for (const form of this._forms) {
       if (this._hass) form.hass = this._hass;
+      const def = form._sectionDef;
+      if (def && def.buildSchema && form._schemaMode !== data.autoplay_mode) {
+        form.schema = def.buildSchema(data);
+        form._schemaMode = data.autoplay_mode;
+      }
       form.data = data;
     }
     if (!this._summaryEls) return;
