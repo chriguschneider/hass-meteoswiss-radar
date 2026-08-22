@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.5.3";
+const CARD_VERSION = "0.5.4";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -420,8 +420,12 @@ class MeteoSwissRadarCard extends HTMLElement {
           color: var(--warning-color, #b26a00);
         }
         #attrib {
-          padding: 0 12px 6px; text-align: right; font-size: 9px;
+          position: absolute; left: 50%; bottom: 8px;
+          transform: translateX(-50%); z-index: 1000;
+          background: var(--card-background-color, #fff);
           color: var(--secondary-text-color, #888);
+          opacity: 0.85; padding: 2px 8px; border-radius: 4px;
+          font-size: 9px; white-space: nowrap; pointer-events: none;
           font-family: var(--primary-font-family, sans-serif);
         }
         #error { padding: 16px; color: var(--error-color, #b71c1c); }
@@ -438,6 +442,7 @@ class MeteoSwissRadarCard extends HTMLElement {
             <div id="cells"></div>
             <span id="modehint" hidden>measurement only</span>
           </div>
+          <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
         </div>
         <div id="timebar">
           <div id="elapsed" hidden></div>
@@ -450,7 +455,6 @@ class MeteoSwissRadarCard extends HTMLElement {
           </div>
         </div>
         <div id="axisrow" hidden></div>
-        <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
         <div id="error" hidden></div>
       </ha-card>
     `;
