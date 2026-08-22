@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.2";
+const CARD_VERSION = "0.6.3";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -346,15 +346,11 @@ class MeteoSwissRadarCard extends HTMLElement {
           background: var(--primary-color, #03a9f4); border-radius: 3px;
         }
         #tnow {
-          position: absolute; top: -8px; bottom: -40px; width: 3px;
-          background: #f44336; border-radius: 1.5px;
-          pointer-events: none; z-index: 2;
-        }
-        #tnow:before {
-          content: ""; position: absolute; top: -6px; left: 50%;
+          position: absolute; top: -13px; width: 0; height: 0;
           transform: translateX(-50%);
-          border: 6px solid transparent; border-bottom: none;
+          border: 9px solid transparent; border-bottom: none;
           border-top-color: #f44336;
+          pointer-events: none; z-index: 2;
         }
         #knob {
           position: absolute; top: 50%; left: 0; width: 16px; height: 16px;
