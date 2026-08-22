@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.1";
+const CARD_VERSION = "0.7.2";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -1031,126 +1031,280 @@ class MeteoSwissRadarCard extends HTMLElement {
 }
 
 
-/* ---------- visual config editor (ha-form based) ---------- */
+/* ---------- visual config editor ----------
+ * Follows the weather-station-card editor pattern: basics always
+ * visible on top, everything else in collapsible ha-expansion-panels
+ * whose headers carry an icon, the section title, a one-line state
+ * summary readable while collapsed, and a per-section reset button. */
 
-const EDITOR_SCHEMA = [
+const EDITOR_LABELS = {
+  height: "Map height (px)",
+  zoom: "Initial zoom",
+  frame_duration: "Frame duration (ms)",
+  frame_stride: "Frame stride",
+  past_hours: "History (h)",
+  forecast_hours: "Forecast (h)",
+  autoplay_mode: "Autoplay on open",
+  play_past_hours: "Window: history (h)",
+  play_forecast_hours: "Window: forecast (h)",
+  legend: "Legend",
+  attribution: "Attribution",
+  time_axis: "Time labels",
+  large_label: "Large time label",
+};
+
+const EDITOR_DEFAULTS = {
+  height: 400,
+  zoom: 8,
+  frame_duration: 300,
+  frame_stride: 1,
+  autoplay_mode: "off",
+  play_past_hours: 1,
+  play_forecast_hours: 8,
+  legend: true,
+  attribution: true,
+  time_axis: true,
+  large_label: true,
+};
+
+const BASICS_SCHEMA = [
   {
     type: "grid",
     name: "",
     schema: [
       { name: "height", selector: { number: { min: 200, max: 900, step: 10, mode: "box" } } },
       { name: "zoom", selector: { number: { min: 6, max: 14, step: 0.5, mode: "box" } } },
-      { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
-      { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
-      { name: "past_hours", selector: { number: { min: 0, max: 12, step: 1, mode: "box" } } },
-      { name: "forecast_hours", selector: { number: { min: 0, max: 33, step: 1, mode: "box" } } },
-    ],
-  },
-  {
-    name: "autoplay_mode",
-    selector: {
-      select: {
-        mode: "dropdown",
-        options: [
-          { value: "off", label: "Off — start paused" },
-          { value: "window", label: "Window — play the configured range on open" },
-          { value: "full", label: "Full — play the whole timeline on open" },
-        ],
-      },
-    },
-  },
-  {
-    type: "grid",
-    name: "",
-    schema: [
-      { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
-      { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
-    ],
-  },
-  {
-    type: "grid",
-    name: "",
-    schema: [
-      { name: "legend", selector: { boolean: {} } },
-      { name: "attribution", selector: { boolean: {} } },
-      { name: "time_axis", selector: { boolean: {} } },
-      { name: "large_label", selector: { boolean: {} } },
     ],
   },
 ];
 
-const EDITOR_LABELS = {
-  height: "Map height (px)",
-  zoom: "Initial zoom",
-  frame_duration: "Frame duration (ms)",
-  frame_stride: "Frame stride (play every Nth frame)",
-  past_hours: "Visible timeline: history (h)",
-  forecast_hours: "Visible timeline: forecast (h)",
-  autoplay_mode: "Autoplay on open",
-  play_past_hours: "Autoplay window: history (h) — playback only",
-  play_forecast_hours: "Autoplay window: forecast (h) — playback only",
-  legend: "Show legend",
-  attribution: "Show attribution",
-  time_axis: "Show time labels",
-  large_label: "Large time label",
-};
+const EDITOR_SECTIONS = [
+  {
+    key: "playback",
+    icon: "mdi:play-circle-outline",
+    title: "Playback",
+    reset: [
+      "autoplay_mode",
+      "play_past_hours",
+      "play_forecast_hours",
+      "frame_duration",
+      "frame_stride",
+      "autoplay",
+    ],
+    schema: [
+      {
+        name: "autoplay_mode",
+        selector: {
+          select: {
+            mode: "dropdown",
+            options: [
+              { value: "off", label: "Off — start paused" },
+              { value: "window", label: "Window — play the configured range on open" },
+              { value: "full", label: "Full — play the whole timeline on open" },
+            ],
+          },
+        },
+      },
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
+          { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
+          { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
+          { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
+        ],
+      },
+    ],
+  },
+  {
+    key: "timeline",
+    icon: "mdi:chart-timeline-variant",
+    title: "Timeline",
+    reset: ["past_hours", "forecast_hours", "time_axis"],
+    schema: [
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "past_hours", selector: { number: { min: 0, max: 12, step: 1, mode: "box" } } },
+          { name: "forecast_hours", selector: { number: { min: 0, max: 33, step: 1, mode: "box" } } },
+        ],
+      },
+      { name: "time_axis", selector: { boolean: {} } },
+    ],
+  },
+  {
+    key: "display",
+    icon: "mdi:eye-outline",
+    title: "Display",
+    reset: ["legend", "attribution", "large_label"],
+    schema: [
+      {
+        type: "grid",
+        name: "",
+        schema: [
+          { name: "legend", selector: { boolean: {} } },
+          { name: "attribution", selector: { boolean: {} } },
+          { name: "large_label", selector: { boolean: {} } },
+        ],
+      },
+    ],
+  },
+];
 
 class MeteoSwissRadarCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = config || {};
     this._render();
+    this._updateForms();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._form) this._form.hass = hass;
+    if (this._forms) for (const f of this._forms) f.hass = hass;
   }
 
   connectedCallback() {
     this._render();
+    this._updateForms();
+  }
+
+  _data() {
+    return { ...EDITOR_DEFAULTS, ...(this._config || {}) };
+  }
+
+  _emit(config) {
+    for (const key of Object.keys(config)) {
+      if (config[key] === undefined || config[key] === null || config[key] === "") {
+        delete config[key];
+      }
+    }
+    this._config = config;
+    this._updateForms();
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _makeForm(schema) {
+    const form = document.createElement("ha-form");
+    form.computeLabel = (item) => EDITOR_LABELS[item.name] || item.name;
+    form.schema = schema;
+    form.addEventListener("value-changed", (ev) => {
+      // Every form is fed the full data object, so the emitted value is
+      // the full config with this form's change applied.
+      this._emit({ type: this._config.type, ...(ev.detail.value || {}) });
+    });
+    this._forms.push(form);
+    return form;
+  }
+
+  _resetSection(def) {
+    const config = { ...this._config };
+    for (const key of def.reset) delete config[key];
+    this._emit(config);
   }
 
   _render() {
-    if (!this._config || !this.isConnected) return;
-    if (!this._form) {
-      this._form = document.createElement("ha-form");
-      this._form.computeLabel = (schema) =>
-        EDITOR_LABELS[schema.name] || schema.name;
-      this._form.addEventListener("value-changed", (ev) => {
-        const value = ev.detail.value || {};
-        const config = { type: this._config.type, ...value };
-        for (const key of Object.keys(config)) {
-          if (config[key] === undefined || config[key] === null || config[key] === "") {
-            delete config[key];
-          }
-        }
-        this._config = config;
-        this.dispatchEvent(
-          new CustomEvent("config-changed", {
-            detail: { config },
-            bubbles: true,
-            composed: true,
-          })
-        );
+    if (!this._config || !this.isConnected || this._built) return;
+    this._built = true;
+    this._forms = [];
+    this._summaryEls = {};
+    this.textContent = "";
+    const style = document.createElement("style");
+    style.textContent = `
+      .msr-basics { display: block; margin-bottom: 14px; }
+      ha-expansion-panel.msr-panel { display: block; margin-bottom: 8px; }
+      .msr-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 2px 0; }
+      .msr-head ha-icon { color: var(--secondary-text-color); }
+      .msr-titles { flex: 1; min-width: 0; }
+      .msr-title { font-size: 14px; font-weight: 500; }
+      .msr-summary { font-size: 12px; color: var(--secondary-text-color); }
+      .msr-body { padding: 12px 8px 8px; }
+    `;
+    this.appendChild(style);
+
+    const basics = this._makeForm(BASICS_SCHEMA);
+    basics.classList.add("msr-basics");
+    this.appendChild(basics);
+
+    for (const def of EDITOR_SECTIONS) {
+      const panel = document.createElement("ha-expansion-panel");
+      panel.className = "msr-panel";
+      panel.outlined = true;
+
+      const head = document.createElement("div");
+      head.slot = "header";
+      head.className = "msr-head";
+      const icon = document.createElement("ha-icon");
+      icon.icon = def.icon;
+      const titles = document.createElement("div");
+      titles.className = "msr-titles";
+      const title = document.createElement("div");
+      title.className = "msr-title";
+      title.textContent = def.title;
+      const summary = document.createElement("div");
+      summary.className = "msr-summary";
+      titles.appendChild(title);
+      titles.appendChild(summary);
+      this._summaryEls[def.key] = summary;
+      const reset = document.createElement("ha-icon-button");
+      reset.title = "Reset section to defaults";
+      const resetIcon = document.createElement("ha-icon");
+      resetIcon.icon = "mdi:restore";
+      reset.appendChild(resetIcon);
+      reset.addEventListener("click", (ev) => {
+        ev.stopPropagation(); // the header itself toggles the panel
+        this._resetSection(def);
       });
-      this.appendChild(this._form);
+      head.appendChild(icon);
+      head.appendChild(titles);
+      head.appendChild(reset);
+      panel.appendChild(head);
+
+      const body = document.createElement("div");
+      body.className = "msr-body";
+      body.appendChild(this._makeForm(def.schema));
+      panel.appendChild(body);
+      this.appendChild(panel);
     }
-    if (this._hass) this._form.hass = this._hass;
-    this._form.schema = EDITOR_SCHEMA;
-    this._form.data = {
-      height: 400,
-      zoom: 8,
-      frame_duration: 300,
-      frame_stride: 1,
-      autoplay_mode: "off",
-      play_past_hours: 1,
-      play_forecast_hours: 8,
-      legend: true,
-      attribution: true,
-      time_axis: true,
-      large_label: true,
-      ...this._config,
-    };
+  }
+
+  _updateForms() {
+    if (!this._forms) return;
+    const data = this._data();
+    for (const form of this._forms) {
+      if (this._hass) form.hass = this._hass;
+      form.data = data;
+    }
+    if (!this._summaryEls) return;
+    const playback =
+      (data.autoplay_mode === "window"
+        ? `Window −${data.play_past_hours} h → +${data.play_forecast_hours} h`
+        : data.autoplay_mode === "full"
+          ? "Full timeline on open"
+          : "Autoplay off") +
+      ` · ${data.frame_duration} ms` +
+      (Number(data.frame_stride) > 1 ? ` · every ${data.frame_stride}. frame` : "");
+    const past = Number(data.past_hours);
+    const fc = Number(data.forecast_hours);
+    const timeline =
+      (Number.isFinite(past) || Number.isFinite(fc)
+        ? `−${Number.isFinite(past) ? past : "all"} h → +${Number.isFinite(fc) ? fc : "all"} h`
+        : "Full range") + (data.time_axis === false ? " · labels off" : " · labels on");
+    const shown = [
+      data.legend !== false && "legend",
+      data.attribution !== false && "attribution",
+      data.large_label !== false && "large label",
+    ].filter(Boolean);
+    this._summaryEls.playback.textContent = playback;
+    this._summaryEls.timeline.textContent = timeline;
+    this._summaryEls.display.textContent = shown.length ? shown.join(" · ") : "minimal";
   }
 }
 
