@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.1";
+const CARD_VERSION = "0.6.2";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -312,7 +312,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         }
         #label {
           position: absolute; left: 8px; bottom: 8px; z-index: 1000;
-          background: #78909c; color: #fff;
+          background: #b5c2c9; color: #263238;
           padding: 4px 10px; border-radius: 6px;
           font-size: 12px;
           font-family: var(--primary-font-family, sans-serif);
@@ -322,7 +322,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           font-weight: ${c.large_label ? "700" : "600"}; }
         #label .l2 { font-size: 11px; opacity: 0.9; }
         #label[data-type="forecast"] {
-          background: #81d4fa; color: #01579b;
+          background: #c1eafc; color: #01579b;
         }
         #banner {
           position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
