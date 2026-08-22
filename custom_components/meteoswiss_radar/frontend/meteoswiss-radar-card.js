@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.3";
+const CARD_VERSION = "0.6.4";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -471,8 +471,9 @@ class MeteoSwissRadarCard extends HTMLElement {
         1,
         Math.max(0, (ev.clientX - rect.left) / rect.width)
       );
-      const idx = Math.round(frac * (this._frames.length - 1));
-      if (Number.isFinite(idx) && this._frames.length) this._onScrub(idx);
+      if (!this._frames.length || !this._span) return;
+      const idx = this._nearestIndexByTs(this._t0 + frac * this._span);
+      this._onScrub(idx);
     };
     this._trackWrap.addEventListener("pointerdown", (ev) => {
       try {
@@ -581,8 +582,13 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._animVersion = version;
     this._frames = frames;
     const measCount = frames.filter((f) => f.type === "measurement").length;
-    this._measFraction = measCount / frames.length;
-    const b = (this._measFraction * 100).toFixed(2);
+    // Positions map TIME, not frame index: the cadence is mixed (5-min
+    // measurement, 5/10-min forecast), so index fractions drift off the axis.
+    this._t0 = frames[0].ts;
+    this._span = Math.max(1, frames[frames.length - 1].ts - this._t0);
+    const lastMeas = frames.filter((f) => f.type === "measurement").pop();
+    const measFrac = lastMeas ? (lastMeas.ts - this._t0) / this._span : 0;
+    const b = (measFrac * 100).toFixed(2);
     this._tMeas.style.width = b + "%";
     this._tFc.style.width = (100 - Number(b)).toFixed(2) + "%";
     this._tNow.style.left = b + "%";
@@ -882,7 +888,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!f) return;
     this._frameIndex = idx;
     this._updateLabel();
-    const frac = this._frames.length > 1 ? idx / (this._frames.length - 1) : 0;
+    const frac = this._span ? (f.ts - this._t0) / this._span : 0;
     const pct = (frac * 100).toFixed(2) + "%";
     this._tElapsed.style.width = pct;
     this._knob.style.left = pct;
