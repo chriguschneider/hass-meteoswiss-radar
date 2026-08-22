@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.1";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -312,19 +312,17 @@ class MeteoSwissRadarCard extends HTMLElement {
         }
         #label {
           position: absolute; left: 8px; bottom: 8px; z-index: 1000;
-          background: var(--card-background-color, rgba(255, 255, 255, 0.88));
-          color: var(--primary-text-color, #333);
-          padding: ${c.large_label ? "4px 10px" : "2px 8px"};
-          border-radius: ${c.large_label ? "6px" : "4px"};
+          background: #78909c; color: #fff;
+          padding: 4px 10px; border-radius: 6px;
           font-size: 12px;
           font-family: var(--primary-font-family, sans-serif);
-          opacity: 0.94; pointer-events: none;
+          opacity: 0.95; pointer-events: none;
         }
         #label .l1 { font-size: ${c.large_label ? "15px" : "12px"};
-          font-weight: ${c.large_label ? "700" : "400"}; }
-        #label .l2 { font-size: 11px; }
+          font-weight: ${c.large_label ? "700" : "600"}; }
+        #label .l2 { font-size: 11px; opacity: 0.9; }
         #label[data-type="forecast"] {
-          background: ${COLOR_FORECAST}; color: #4e342e; opacity: 0.96;
+          background: #81d4fa; color: #01579b;
         }
         #banner {
           position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
@@ -348,8 +346,15 @@ class MeteoSwissRadarCard extends HTMLElement {
           background: var(--primary-color, #03a9f4); border-radius: 3px;
         }
         #tnow {
-          position: absolute; top: -4px; bottom: -4px; width: 2px;
-          background: #f44336; border-radius: 1px;
+          position: absolute; top: -8px; bottom: -40px; width: 3px;
+          background: #f44336; border-radius: 1.5px;
+          pointer-events: none; z-index: 2;
+        }
+        #tnow:before {
+          content: ""; position: absolute; top: -6px; left: 50%;
+          transform: translateX(-50%);
+          border: 6px solid transparent; border-bottom: none;
+          border-top-color: #f44336;
         }
         #knob {
           position: absolute; top: 50%; left: 0; width: 16px; height: 16px;
@@ -365,6 +370,10 @@ class MeteoSwissRadarCard extends HTMLElement {
           color: var(--secondary-text-color, #666); white-space: nowrap;
         }
         #datesrow { position: relative; height: 15px; }
+        #datesrow .daysep {
+          position: absolute; top: -19px; bottom: 1px; width: 1px;
+          background: var(--secondary-text-color, #999); opacity: 0.5;
+        }
         #datesrow b {
           position: absolute; transform: translateX(-50%);
           font-size: 10.5px; font-weight: 700;
@@ -665,6 +674,12 @@ class MeteoSwissRadarCard extends HTMLElement {
       ds.setHours(0, 0, 0, 0);
       const dayStart = ds.getTime() / 1000;
       const dayEnd = dayStart + 86400;
+      if (dayStart > t0) {
+        const sep = document.createElement("div");
+        sep.className = "daysep";
+        sep.style.left = (((dayStart - t0) / span) * 100).toFixed(2) + "%";
+        this._datesRow.appendChild(sep);
+      }
       const visStart = Math.max(dayStart, t0);
       const visEnd = Math.min(dayEnd, t1);
       const width = ((visEnd - visStart) / span) * 100;
