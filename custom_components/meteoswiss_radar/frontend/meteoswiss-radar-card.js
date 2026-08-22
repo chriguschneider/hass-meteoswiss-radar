@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.3";
+const CARD_VERSION = "0.7.4";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -992,7 +992,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._label.textContent = "";
       const l1 = document.createElement("div");
       l1.className = "l1";
-      l1.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 6)} · ${f.timepoint}`;
+      l1.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
       const l2 = document.createElement("div");
       l2.className = "l2";
       l2.textContent = type;
@@ -1000,7 +1000,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._label.appendChild(l2);
     } else {
       // Compact label: the chip color already tells measurement vs forecast.
-      this._label.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 6)} · ${f.timepoint}`;
+      this._label.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
     }
     this._label.dataset.type = f.type;
     this._label.hidden = false;
