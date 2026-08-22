@@ -1,0 +1,23 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`decodeFrame > matches the golden geometry (locks decoder + projection) 1`] = `
+[
+  {
+    "color": "#9e849a",
+    "shapes": [
+      [
+        [
+          [
+            46.59612941764793,
+            7.569136004943896,
+          ],
+          [
+            46.60060448698354,
+            7.582179390680539,
+          ],
+        ],
+      ],
+    ],
+  },
+]
+`;

@@ -1,0 +1,15 @@
+{
+  "name": "hass-meteoswiss-radar-card",
+  "version": "0.7.6",
+  "private": true,
+  "type": "module",
+  "description": "Tests and syntax checks for the MeteoSwiss Radar Lovelace card.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "node --check custom_components/meteoswiss_radar/frontend/meteoswiss-radar-card.js"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

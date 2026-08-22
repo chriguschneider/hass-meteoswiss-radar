@@ -1,0 +1,32 @@
+# Architecture Decision Records
+
+Short, dated records of decisions that shape this repo: why the proxy has
+an allowlist, why the card ships without a bundler, and so on. They exist
+so a later change (human or AI) does not silently undo a deliberate call.
+
+## When to write one
+
+Write an ADR when a change:
+
+- alters the **proxy allowlist** or the security boundary of the proxy,
+- changes **how the card is built or shipped** (a bundler, a module
+  split, a new asset pipeline),
+- adds or moves a **quality gate** (a CI job, a lint rule, a coverage
+  floor),
+- introduces a **new architectural pattern** or breaks a module boundary,
+- **deviates from an existing accepted ADR**.
+
+Skip it for bug fixes that keep the contract, refactors inside a module,
+added test coverage, and prose/style tweaks.
+
+## How
+
+1. Copy [`template.md`](template.md) to `NNNN-short-slug.md` (next free
+   number).
+2. Fill in Context, Decision, Consequences. Keep it to a screen.
+3. Land it in the same PR as the code it describes.
+
+## Index
+
+- [0001 — Proxy path allowlist as the security boundary](0001-proxy-path-allowlist.md)
+- [0002 — Card ships as raw JS, no build step](0002-no-build-step-raw-card.md)

@@ -9,3 +9,11 @@ venv/
 .vscode/
 *.swp
 .DS_Store
+
+# Node / test tooling
+node_modules/
+npm-debug.log*
+
+# Machine-local Claude notes (shared conventions live in AGENTS.md)
+/CLAUDE.md
+.claude/settings.local.json

@@ -1,0 +1,16 @@
+# Tooling config for the MeteoSwiss Radar integration.
+# No build system: this repo ships the integration + card as source.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+# Conservative set: pyflakes, pycodestyle, bugbear, pyupgrade.
+# Import sorting (I) is intentionally left off for now to avoid churn
+# in the existing integration; enable it in a dedicated hygiene PR.
+select = ["E", "F", "W", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
