@@ -1,0 +1,81 @@
+name: Claude (scheduled backlog)
+
+# Time-driven: every 6 hours, pick the next open issue in priority order,
+# claim it, implement it on a branch, and open a DRAFT PR. Never merges,
+# never pushes to master. The model is chosen from the issue's labels.
+# Requires the ANTHROPIC_API_KEY secret. See docs/AUTOMATION.md.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # allow a manual "run now" from the Actions tab
+
+concurrency:
+  group: claude-scheduled
+  cancel-in-progress: false
+
+jobs:
+  work-next-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure claim label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "agent:in-progress" \
+            --color "fbca04" --description "Claimed by the scheduled Claude run" \
+            2>/dev/null || true
+
+      - name: Pick next issue
+        id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/pick-next-issue.sh >> "$GITHUB_OUTPUT"
+
+      - name: Pick model
+        id: model
+        if: steps.next.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/pick-model.sh "${{ steps.next.outputs.number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Claim the issue
+        if: steps.next.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ steps.next.outputs.number }}" --add-label "agent:in-progress"
+
+      - name: Implement and open a draft PR
+        if: steps.next.outputs.number != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40"
+          prompt: |
+            You are working through the issue backlog of this repository,
+            unattended. Read AGENTS.md and docs/adr/ FIRST, then work only on
+            GitHub issue #${{ steps.next.outputs.number }}.
+
+            Rules (non-negotiable):
+            - Create a branch named `claude/${{ steps.next.outputs.number }}-<short-slug>`.
+              NEVER commit or push to `master`.
+            - Implement the issue. Add or update tests. Run the relevant checks
+              (`npm test`, `npm run check`, `ruff check custom_components tests`,
+              `pytest -q`) and make them pass locally before opening the PR.
+            - Open a **draft** PR against master with `gh pr create --draft`,
+              linking the issue (`Closes #${{ steps.next.outputs.number }}`) and
+              summarising what you changed and how you verified it.
+            - If the issue is ambiguous, under-specified, or you cannot verify the
+              fix, DO NOT guess. Open the draft PR with your partial work and a
+              clear "Blocked / needs decision" section, and stop.
+            - Respect the dependency order in the tracking issue (#20): if this
+              issue depends on something not yet merged, say so in the PR and keep
+              the change minimal.

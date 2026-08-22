@@ -99,6 +99,15 @@ every push. If you iterate with several pushes, open the PR as a
 **draft** until you expect CI to pass, then mark ready. Direct push to
 `master` is not the flow; open a PR.
 
+## Automation
+
+Two workflows let Claude work issues automatically, both draft-PR-only
+(see [`docs/AUTOMATION.md`](docs/AUTOMATION.md)): a **scheduled** backlog
+run every 6 h that picks the next issue by priority, and an **@claude**
+mention handler. Both choose the model from the issue's labels via
+`.github/scripts/pick-model.sh` (P1 → Opus, P3/good-first → Haiku, else
+Sonnet).
+
 ## Testing
 
 - **Card decoder**: `npm test` (vitest). The pure decoder functions are

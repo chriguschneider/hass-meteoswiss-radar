@@ -1,0 +1,45 @@
+name: Claude (@mention)
+
+# Event-driven: someone writes "@claude ..." in an issue or PR comment, or an
+# issue is assigned. The model is chosen from the issue's labels (P1 -> Opus,
+# P3/good-first -> Haiku, else Sonnet). Requires the ANTHROPIC_API_KEY secret
+# (or swap for claude_code_oauth_token). See docs/AUTOMATION.md.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [assigned]
+
+# Don't run on our own bot comments or on unrelated chatter.
+jobs:
+  claude:
+    if: >-
+      github.event_name == 'issues' ||
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    concurrency:
+      group: claude-mention-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick model from issue labels
+        id: model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n="${{ github.event.issue.number || github.event.pull_request.number }}"
+          bash .github/scripts/pick-model.sh "$n" >> "$GITHUB_OUTPUT"
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The action reads the @claude comment as the task automatically.
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 20"
