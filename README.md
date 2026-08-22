@@ -32,6 +32,10 @@ broken card. Remaining before v1: HACS packaging.
 type: custom:meteoswiss-radar-card
 ```
 
+The card has a **visual editor** (dashboard card options UI); every option
+below can also be set there. The play button cycles three modes: paused ->
+play the configured window (looping) -> play the full timeline.
+
 ### Options
 
 | Option | Default | Description |
@@ -43,7 +47,9 @@ type: custom:meteoswiss-radar-card
 | `frame_stride` | `1` | Play every Nth frame — raise on slow devices. |
 | `past_hours` | full range | Hours of measurement history to keep on the timeline. |
 | `forecast_hours` | full range | Hours of forecast to keep; `0` gives a measurement-only card. |
-| `autoplay` | `false` | Start playing as soon as the card loads. |
+| `autoplay_mode` | `off` | `off`, `window` (play the configured window on open, looping) or `full` (play the whole timeline). |
+| `play_past_hours` | `1` | Play window: hours of history before now. |
+| `play_forecast_hours` | `8` | Play window: hours of forecast after now. |
 | `legend` | `true` | Show the intensity legend (mm/h) overlay on the map. |
 | `attribution` | `true` | Show the "Source: MeteoSwiss · © swisstopo" chip at the bottom center of the map. The swisstopo basemap license requires attribution — disable only for private use at your own discretion. |
 | `time_axis` | `true` | Hour and date label rows under the timeline track. |

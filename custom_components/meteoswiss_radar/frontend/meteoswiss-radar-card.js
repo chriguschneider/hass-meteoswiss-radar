@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.5";
+const CARD_VERSION = "0.7.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -219,6 +219,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._frames = [];
     this._frameIndex = 0;
     this._playing = false;
+    this._playMode = "paused";
     this._failStreak = 0;
     this._dataReady = false;
     this._lastManifest404Refresh = 0;
@@ -230,13 +231,18 @@ class MeteoSwissRadarCard extends HTMLElement {
       zoom: 8,
       frame_duration: 300,
       frame_stride: 1,
-      autoplay: false,
+      autoplay_mode: "off",
+      play_past_hours: 1,
+      play_forecast_hours: 8,
       legend: true,
       attribution: true,
       time_axis: true,
       large_label: true,
       ...(config || {}),
     };
+    if ((config || {}).autoplay === true && !(config || {}).autoplay_mode) {
+      this._config.autoplay_mode = "full"; // legacy autoplay: true
+    }
   }
 
   set hass(hass) {
@@ -264,6 +270,10 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   static getStubConfig() {
     return {};
+  }
+
+  static getConfigElement() {
+    return document.createElement("meteoswiss-radar-card-editor");
   }
 
   _frameDurationMs() {
@@ -386,6 +396,13 @@ class MeteoSwissRadarCard extends HTMLElement {
           border: none; border-radius: 50%; cursor: pointer;
           background: var(--primary-color, #03a9f4); color: #fff;
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+        }
+        #play b.mode {
+          position: absolute; right: -3px; bottom: -3px;
+          font-size: 8px; font-weight: 700; line-height: 1;
+          background: #fff; color: var(--primary-color, #03a9f4);
+          padding: 2px 4px; border-radius: 6px;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
         }
         #legend {
           position: absolute; top: 8px; right: 8px; z-index: 1000;
@@ -545,9 +562,10 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._prefetch(idx);
     this._timeline.hidden = false;
     this._playBtn.hidden = false;
-    if (this._config.autoplay && !this._autoplayStarted) {
+    const mode = this._config.autoplay_mode;
+    if ((mode === "window" || mode === "full") && !this._autoplayStarted) {
       this._autoplayStarted = true;
-      this._play();
+      this._startPlay(mode);
     }
   }
 
@@ -606,6 +624,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._frameIndex = this._nearestIndexByTs(prevTs);
       this._moveMarkers(this._frameIndex);
     }
+    if (this._playMode === "window") this._computeWindow();
   }
 
   /* past_hours / forecast_hours config: trim the timeline around the most
@@ -814,15 +833,41 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   /* ---------- playback ---------- */
 
+  /* The play button cycles: paused -> window (the configured relevant
+   * range around now, looping) -> full timeline -> paused. */
   _togglePlay() {
-    if (this._playing) this._pause();
-    else this._play();
+    if (this._playMode === "window") this._startPlay("full");
+    else if (this._playMode === "full") this._pause();
+    else this._startPlay("window");
   }
 
-  _play() {
-    if (this._playing || !this._frames.length) return;
+  _computeWindow() {
+    const lastMeas = this._frames[this._lastMeasurementIndex()];
+    const now = lastMeas ? lastMeas.ts : this._t0;
+    const past = Number(this._config.play_past_hours);
+    const fc = Number(this._config.play_forecast_hours);
+    this._winStart = this._nearestIndexByTs(
+      now - (Number.isFinite(past) ? past : 1) * 3600
+    );
+    this._winEnd = this._nearestIndexByTs(
+      now + (Number.isFinite(fc) ? fc : 8) * 3600
+    );
+    if (this._winEnd <= this._winStart) {
+      this._winStart = 0;
+      this._winEnd = this._frames.length - 1;
+    }
+  }
+
+  _startPlay(mode) {
+    if (!this._frames.length) return;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._playMode = mode;
     this._playing = true;
-    this._playBtn.innerHTML = PAUSE_SVG;
+    if (mode === "window") {
+      this._computeWindow();
+      this._jumpTo(this._winStart);
+    }
+    this._updatePlayBtn();
     this._lastStepTs = performance.now();
     const loop = (ts) => {
       if (!this._playing) return;
@@ -837,15 +882,48 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _pause() {
     this._playing = false;
+    this._playMode = "paused";
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
-    if (this._playBtn) this._playBtn.innerHTML = PLAY_SVG;
+    this._updatePlayBtn();
+  }
+
+  _updatePlayBtn() {
+    if (!this._playBtn) return;
+    if (!this._playing) {
+      this._playBtn.innerHTML = PLAY_SVG;
+      return;
+    }
+    const badge =
+      this._playMode === "window"
+        ? `${Number(this._config.play_forecast_hours) || 8}h`
+        : "all";
+    this._playBtn.innerHTML = `${PAUSE_SVG}<b class="mode">${badge}</b>`;
+  }
+
+  _jumpTo(idx) {
+    const f = this._frames[idx];
+    if (!f) return;
+    this._frameIndex = idx;
+    this._moveMarkers(idx);
+    this._ensureFrame(f.url)
+      .then(() => {
+        if (this._frameIndex === idx) this._showFrame(idx);
+      })
+      .catch(() => {});
+    this._prefetch(idx);
   }
 
   _advance() {
     if (!this._frames.length) return;
-    const next = (this._frameIndex + this._strideN()) % this._frames.length;
+    let next = this._frameIndex + this._strideN();
+    if (this._playMode === "window") {
+      if (next > this._winEnd) next = this._winStart;
+    } else {
+      next = next % this._frames.length;
+    }
     const f = this._frames[next];
+    if (!f) return;
     const areas = this._cacheGet(f.url);
     if (!areas) {
       // Hold the current frame until the next one is decoded.
@@ -952,6 +1030,130 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 }
 
+
+/* ---------- visual config editor (ha-form based) ---------- */
+
+const EDITOR_SCHEMA = [
+  {
+    type: "grid",
+    name: "",
+    schema: [
+      { name: "height", selector: { number: { min: 200, max: 900, step: 10, mode: "box" } } },
+      { name: "zoom", selector: { number: { min: 6, max: 14, step: 0.5, mode: "box" } } },
+      { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
+      { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
+      { name: "past_hours", selector: { number: { min: 0, max: 12, step: 1, mode: "box" } } },
+      { name: "forecast_hours", selector: { number: { min: 0, max: 33, step: 1, mode: "box" } } },
+    ],
+  },
+  {
+    name: "autoplay_mode",
+    selector: {
+      select: {
+        mode: "dropdown",
+        options: [
+          { value: "off", label: "Off — start paused" },
+          { value: "window", label: "Window — play the configured range on open" },
+          { value: "full", label: "Full — play the whole timeline on open" },
+        ],
+      },
+    },
+  },
+  {
+    type: "grid",
+    name: "",
+    schema: [
+      { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
+      { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
+    ],
+  },
+  {
+    type: "grid",
+    name: "",
+    schema: [
+      { name: "legend", selector: { boolean: {} } },
+      { name: "attribution", selector: { boolean: {} } },
+      { name: "time_axis", selector: { boolean: {} } },
+      { name: "large_label", selector: { boolean: {} } },
+    ],
+  },
+];
+
+const EDITOR_LABELS = {
+  height: "Map height (px)",
+  zoom: "Initial zoom",
+  frame_duration: "Frame duration (ms)",
+  frame_stride: "Frame stride (play every Nth frame)",
+  past_hours: "Timeline: history (h)",
+  forecast_hours: "Timeline: forecast (h)",
+  autoplay_mode: "Autoplay on open",
+  play_past_hours: "Play window: history (h)",
+  play_forecast_hours: "Play window: forecast (h)",
+  legend: "Show legend",
+  attribution: "Show attribution",
+  time_axis: "Show time labels",
+  large_label: "Large time label",
+};
+
+class MeteoSwissRadarCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._form) this._form.hass = hass;
+  }
+
+  connectedCallback() {
+    this._render();
+  }
+
+  _render() {
+    if (!this._config || !this.isConnected) return;
+    if (!this._form) {
+      this._form = document.createElement("ha-form");
+      this._form.computeLabel = (schema) =>
+        EDITOR_LABELS[schema.name] || schema.name;
+      this._form.addEventListener("value-changed", (ev) => {
+        const value = ev.detail.value || {};
+        const config = { type: this._config.type, ...value };
+        for (const key of Object.keys(config)) {
+          if (config[key] === undefined || config[key] === null || config[key] === "") {
+            delete config[key];
+          }
+        }
+        this._config = config;
+        this.dispatchEvent(
+          new CustomEvent("config-changed", {
+            detail: { config },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      });
+      this.appendChild(this._form);
+    }
+    if (this._hass) this._form.hass = this._hass;
+    this._form.schema = EDITOR_SCHEMA;
+    this._form.data = {
+      height: 400,
+      zoom: 8,
+      frame_duration: 300,
+      frame_stride: 1,
+      autoplay_mode: "off",
+      play_past_hours: 1,
+      play_forecast_hours: 8,
+      legend: true,
+      attribution: true,
+      time_axis: true,
+      large_label: true,
+      ...this._config,
+    };
+  }
+}
+
 /* HA (2026.8+) swaps window.customElements for a scoped-registry polyfill
  * during app boot. This module loads early (add_extra_js_url), so a define
  * issued immediately can land in the native registry before the swap — the
@@ -962,6 +1164,12 @@ class MeteoSwissRadarCard extends HTMLElement {
 function defineCard() {
   if (!window.customElements.get("meteoswiss-radar-card")) {
     window.customElements.define("meteoswiss-radar-card", MeteoSwissRadarCard);
+  }
+  if (!window.customElements.get("meteoswiss-radar-card-editor")) {
+    window.customElements.define(
+      "meteoswiss-radar-card-editor",
+      MeteoSwissRadarCardEditor
+    );
   }
 }
 
@@ -987,6 +1195,7 @@ if (!window.customCards.some((c) => c.type === "meteoswiss-radar-card")) {
     type: "meteoswiss-radar-card",
     name: "MeteoSwiss Radar Card",
     description: "MeteoSwiss precipitation radar animation on a swisstopo map",
+    preview: true,
   });
 }
 console.info(
