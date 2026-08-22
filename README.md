@@ -6,9 +6,9 @@ ships a Lovelace card rendering the radar on a swisstopo basemap with Leaflet.
 
 **Status: work in progress.** The card plays the full radar animation —
 ~12 h of measurement into ~28 h of INCA forecast — with play/pause, a
-scrubbing timeline with a rain-intensity bar chart for the home location,
-hour/day axis, playhead bubble, a measurement/forecast label with relative
-time and an intensity legend, centered on your home location. The frame list refreshes itself while the
+scrubbing slider with hour/day axis and playhead bubble, a
+measurement/forecast label and an intensity legend overlay, centered on
+your home location. The frame list refreshes itself while the
 card is open, and upstream breakage degrades to a clean banner instead of a
 broken card. Remaining before v1: HACS packaging.
 
@@ -45,7 +45,6 @@ type: custom:meteoswiss-radar-card
 | `forecast_hours` | full range | Hours of forecast to keep; `0` gives a measurement-only card. |
 | `autoplay` | `false` | Start playing as soon as the card loads. |
 | `legend` | `true` | Show the intensity legend (mm/h) under the controls. |
-| `rain_bars` | `true` | Bar timeline of the rain intensity at the home location (legend colors, bar height by legend band); the bar strip doubles as the scrubber. Loads every frame once in the background (~12 MB, browser-cached). |
 | `time_axis` | `true` | Hour ticks, 6-h labels, day labels and a red "now" marker under the timeline. |
 | `time_bubble` | `true` | Floating time chip that rides the playhead. |
 | `large_label` | `true` | Big date/time label on the map with a Measurement/Forecast line. |

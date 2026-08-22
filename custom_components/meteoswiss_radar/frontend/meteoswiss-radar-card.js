@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.4.2";
+const CARD_VERSION = "0.5.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -17,13 +17,11 @@ const PATH_CACHE_SIZE = 130; // projected Path2D sets per view (LRU)
 const PREFETCH_AHEAD = 6; // frames fetched ahead of the playhead
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
 const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
-const INTENSITY_QUEUE_GAP_MS = 60; // pause between background intensity loads
 const COLOR_MEASUREMENT = "#90a4ae";
 const COLOR_FORECAST = "#ffb74d";
 const COLOR_PLAYHEAD = "#0277bd";
 const COLOR_NOW = "#d32f2f";
 const RADAR_OPACITY = 0.75;
-const BAR_HEIGHT = 52;
 
 let leafletLoader = null;
 function loadLeaflet() {
@@ -108,40 +106,6 @@ function decodeFrame(frame) {
       shape.map((ct) => decodeContour(ct, grid))
     ),
   }));
-}
-
-/* Even-odd ray cast across all rings of one shape (holes included).
- * Containment is topological, so testing in lat/lng space is exact. */
-function pointInShape(shape, lat, lng) {
-  let inside = false;
-  for (const ring of shape) {
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const yi = ring[i][0];
-      const xi = ring[i][1];
-      const yj = ring[j][0];
-      const xj = ring[j][1];
-      if (
-        yi > lat !== yj > lat &&
-        lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi
-      ) {
-        inside = !inside;
-      }
-    }
-  }
-  return inside;
-}
-
-/* Highest intensity band containing the point, or null when dry.
- * Bar height maps the band's position on the legend scale. */
-function bandAtPoint(areas, lat, lng) {
-  for (let i = areas.length - 1; i >= 0; i--) {
-    for (const shape of areas[i].shapes) {
-      if (pointInShape(shape, lat, lng)) {
-        return { color: areas[i].color, frac: (i + 1) / areas.length };
-      }
-    }
-  }
-  return null;
 }
 
 function weekdayShort(ts) {
@@ -255,7 +219,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     super();
     this._cache = new Map(); // radar_url -> decoded areas
     this._pending = new Map(); // radar_url -> Promise
-    this._intensity = new Map(); // radar_url -> {color, frac} | null | false
     this._frames = [];
     this._frameIndex = 0;
     this._playing = false;
@@ -272,7 +235,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       frame_stride: 1,
       autoplay: false,
       legend: true,
-      rain_bars: true,
       time_axis: true,
       time_bubble: true,
       large_label: true,
@@ -290,7 +252,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._maybeInit();
     if (this._map) requestAnimationFrame(() => this._map.invalidateSize());
     if (this._initialized && !this._refreshTimer) this._startRefreshTimer();
-    if (this._dataReady) this._runIntensityQueue();
   }
 
   disconnectedCallback() {
@@ -302,7 +263,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   getCardSize() {
-    return this._config && this._config.rain_bars ? 8 : 7;
+    return 7;
   }
 
   static getStubConfig() {
@@ -396,6 +357,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           display: flex; align-items: center; gap: 10px;
           padding: ${c.time_bubble ? "30px" : "8px"} 12px 4px;
         }
+        
         #play {
           position: absolute; right: 8px; bottom: 8px; z-index: 1000;
           display: flex; align-items: center; justify-content: center;
@@ -408,12 +370,6 @@ class MeteoSwissRadarCard extends HTMLElement {
         #slider {
           width: 100%; height: 28px; margin: 0; cursor: pointer;
           accent-color: var(--primary-color, #03a9f4); display: block;
-        }
-        #barswrap { position: relative; flex: 1; min-width: 0; }
-        #bars {
-          display: block; width: 100%; height: ${BAR_HEIGHT}px;
-          cursor: pointer; touch-action: none;
-          border-bottom: 1px solid var(--divider-color, #dadce0);
         }
         #bubble {
           position: absolute; top: -26px; transform: translateX(-50%);
@@ -501,12 +457,9 @@ class MeteoSwissRadarCard extends HTMLElement {
           <div id="tbdot" hidden></div>
         </div>
         <div id="controls" hidden>
-          <div id="sliderwrap" ${c.rain_bars ? "hidden" : ""}>
+          <div id="sliderwrap">
             <input id="slider" type="range" min="0" max="0" step="1" value="0"
                    aria-label="Radar timeline">
-          </div>
-          <div id="barswrap" ${c.rain_bars ? "" : "hidden"}>
-            <canvas id="bars" height="${BAR_HEIGHT}"></canvas>
           </div>
         </div>
         <div id="axisrow" hidden></div>
@@ -521,8 +474,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._controls = root.getElementById("controls");
     this._playBtn = root.getElementById("play");
     this._slider = root.getElementById("slider");
-    this._barsWrap = root.getElementById("barswrap");
-    this._barCanvas = root.getElementById("bars");
     this._axisRow = root.getElementById("axisrow");
     this._legendEl = root.getElementById("legend");
     this._cellsEl = root.getElementById("cells");
@@ -535,35 +486,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._bubble = document.createElement("div");
       this._bubble.id = "bubble";
       this._bubble.hidden = true;
-      (c.rain_bars ? this._barsWrap : root.getElementById("sliderwrap")).appendChild(
-        this._bubble
-      );
-    }
-    if (c.rain_bars) {
-      const scrubFromEvent = (ev) => {
-        const rect = this._barCanvas.getBoundingClientRect();
-        const frac = Math.min(
-          1,
-          Math.max(0, (ev.clientX - rect.left) / rect.width)
-        );
-        const idx = Math.round(frac * (this._frames.length - 1));
-        if (Number.isFinite(idx) && this._frames.length) this._onScrub(idx);
-      };
-      this._barCanvas.addEventListener("pointerdown", (ev) => {
-        try {
-          this._barCanvas.setPointerCapture(ev.pointerId);
-        } catch (e) {
-          // synthetic events carry no active pointer — scrubbing still works
-        }
-        this._barScrubbing = true;
-        scrubFromEvent(ev);
-      });
-      this._barCanvas.addEventListener("pointermove", (ev) => {
-        if (this._barScrubbing) scrubFromEvent(ev);
-      });
-      this._barCanvas.addEventListener("pointerup", () => {
-        this._barScrubbing = false;
-      });
+      root.getElementById("sliderwrap").appendChild(this._bubble);
     }
   }
 
@@ -619,7 +542,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._prefetch(idx);
     this._controls.hidden = false;
     this._playBtn.hidden = false;
-    this._runIntensityQueue();
     if (this._config.autoplay && !this._autoplayStarted) {
       this._autoplayStarted = true;
       this._play();
@@ -671,19 +593,11 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._renderLegend(animation.legend);
     this._buildAxis();
 
-    // Drop cached intensities for frames no longer on the timeline.
-    const urls = new Set(frames.map((f) => f.url));
-    for (const key of [...this._intensity.keys()]) {
-      if (!urls.has(key)) this._intensity.delete(key);
-    }
-    this._runIntensityQueue();
-
     // Keep the playhead on the same moment across a manifest rollover.
     if (prevTs != null) {
       this._frameIndex = this._nearestIndexByTs(prevTs);
       this._slider.value = String(this._frameIndex);
     }
-    this._repaintBars();
   }
 
   /* past_hours / forecast_hours config: trim the timeline around the most
@@ -874,86 +788,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._refreshManifest(true).catch(() => {});
   }
 
-  /* ---------- rain bars at the home location ---------- */
-
-  /* Background queue: fetch every frame once, compute the intensity band at
-   * the house, keep only the tiny result. Uses the shared decode cache when
-   * a frame is already loaded but never evicts playback frames for this. */
-  async _runIntensityQueue() {
-    if (!this._config.rain_bars || this._intensityRunning) return;
-    this._intensityRunning = true;
-    let sinceRepaint = 0;
-    try {
-      while (this.isConnected && this._config.rain_bars) {
-        const frame = this._frames.find((f) => !this._intensity.has(f.url));
-        if (!frame) break;
-        try {
-          let areas = this._cache.get(frame.url);
-          if (!areas) {
-            areas = decodeFrame(await this._api(frame.url));
-          }
-          this._intensity.set(
-            frame.url,
-            bandAtPoint(
-              areas,
-              this._hass.config.latitude,
-              this._hass.config.longitude
-            )
-          );
-        } catch (err) {
-          this._intensity.set(frame.url, false); // failed — render as gap
-        }
-        if (++sinceRepaint >= 5) {
-          sinceRepaint = 0;
-          this._repaintBars();
-        }
-        await new Promise((r) => setTimeout(r, INTENSITY_QUEUE_GAP_MS));
-      }
-    } finally {
-      this._intensityRunning = false;
-      this._repaintBars();
-    }
-  }
-
-  _repaintBars() {
-    const cv = this._barCanvas;
-    if (!cv || !this._config.rain_bars || !this._frames.length) return;
-    const w = cv.clientWidth || cv.width;
-    if (cv.width !== w) cv.width = w;
-    const h = BAR_HEIGHT;
-    const ctx = cv.getContext("2d");
-    ctx.clearRect(0, 0, w, h);
-    const n = this._frames.length;
-    const bw = w / n;
-    for (let i = 0; i < n; i++) {
-      const info = this._intensity.get(this._frames[i].url);
-      if (!info) continue;
-      const bh = Math.max(3, info.frac * (h - 10));
-      ctx.fillStyle = info.color;
-      ctx.fillRect(i * bw, h - bh, Math.max(1, bw - 0.4), bh);
-    }
-    // red dashed "now" line at the measurement/forecast boundary
-    if (this._measFraction < 1) {
-      const nx = Math.round(this._measFraction * w) + 0.5;
-      ctx.strokeStyle = COLOR_NOW;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(nx, 0);
-      ctx.lineTo(nx, h);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    // blue playhead
-    const px = Math.round(((this._frameIndex + 0.5) / n) * w) + 0.5;
-    ctx.strokeStyle = COLOR_PLAYHEAD;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(px, 0);
-    ctx.lineTo(px, h);
-    ctx.stroke();
-  }
-
   /* ---------- playback ---------- */
 
   _togglePlay() {
@@ -1057,7 +891,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._bubble.dataset.type = f.type;
       this._bubble.hidden = false;
     }
-    this._repaintBars();
   }
 
   _updateLabel() {
