@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.5.2";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -314,7 +314,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           background: var(--card-background-color, #dddddd);
         }
         #label {
-          position: absolute; left: 8px; bottom: 28px; z-index: 1000;
+          position: absolute; left: 8px; bottom: 8px; z-index: 1000;
           background: var(--card-background-color, rgba(255, 255, 255, 0.88));
           color: var(--primary-text-color, #333);
           padding: ${c.large_label ? "4px 10px" : "2px 8px"};
@@ -418,6 +418,11 @@ class MeteoSwissRadarCard extends HTMLElement {
           display: block; font-size: 9px; text-align: right; margin-top: 2px;
           color: var(--warning-color, #b26a00);
         }
+        #attrib {
+          padding: 0 12px 6px; text-align: right; font-size: 9px;
+          color: var(--secondary-text-color, #888);
+          font-family: var(--primary-font-family, sans-serif);
+        }
         #error { padding: 16px; color: var(--error-color, #b71c1c); }
         [hidden] { display: none !important; }
       </style>
@@ -444,6 +449,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           </div>
         </div>
         <div id="axisrow" hidden></div>
+        <div id="attrib">${ATTRIBUTION}</div>
         <div id="error" hidden></div>
       </ha-card>
     `;
@@ -475,14 +481,11 @@ class MeteoSwissRadarCard extends HTMLElement {
       center,
       zoom: this._config.zoom,
       zoomSnap: 0.5,
+      // Attribution lives in the card footer; the map corners stay free
+      // for the label (bottom left) and the play button (bottom right).
       attributionControl: false,
     });
-    // Bottom-right is occupied by the floating play button.
-    L.control
-      .attribution({ position: "bottomleft", prefix: false })
-      .addTo(this._map);
     L.tileLayer(TILE_URL, {
-      attribution: ATTRIBUTION,
       minZoom: 6,
       maxZoom: 15,
     }).addTo(this._map);
