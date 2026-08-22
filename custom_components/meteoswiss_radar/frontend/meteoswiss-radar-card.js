@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.4";
+const CARD_VERSION = "0.7.5";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -846,12 +846,22 @@ class MeteoSwissRadarCard extends HTMLElement {
     const now = lastMeas ? lastMeas.ts : this._t0;
     const past = Number(this._config.play_past_hours);
     const fc = Number(this._config.play_forecast_hours);
+    let endTs = now + (Number.isFinite(fc) ? fc : 8) * 3600;
+    // play_forecast_until ("HH:MM"): play at least until the next
+    // occurrence of that clock time - the longer of the two bounds wins.
+    const until = this._config.play_forecast_until;
+    if (typeof until === "string" && /^\d{1,2}:\d{2}/.test(until)) {
+      const parts = until.split(":");
+      const d = new Date(now * 1000);
+      d.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
+      let ts = d.getTime() / 1000;
+      if (ts <= now) ts += 86400;
+      if (ts > endTs) endTs = ts;
+    }
     this._winStart = this._nearestIndexByTs(
       now - (Number.isFinite(past) ? past : 1) * 3600
     );
-    this._winEnd = this._nearestIndexByTs(
-      now + (Number.isFinite(fc) ? fc : 8) * 3600
-    );
+    this._winEnd = this._nearestIndexByTs(endTs);
     if (this._winEnd <= this._winStart) {
       this._winStart = 0;
       this._winEnd = this._frames.length - 1;
@@ -1048,6 +1058,7 @@ const EDITOR_LABELS = {
   autoplay_mode: "Autoplay on open",
   play_past_hours: "Window: history (h)",
   play_forecast_hours: "Window: forecast (h)",
+  play_forecast_until: "Window: at least until (time)",
   legend: "Legend",
   attribution: "Attribution",
   time_axis: "Time labels",
@@ -1088,6 +1099,7 @@ const EDITOR_SECTIONS = [
       "autoplay_mode",
       "play_past_hours",
       "play_forecast_hours",
+      "play_forecast_until",
       "frame_duration",
       "frame_stride",
       "autoplay",
@@ -1112,6 +1124,7 @@ const EDITOR_SECTIONS = [
         schema: [
           { name: "play_past_hours", selector: { number: { min: 0, max: 12, step: 0.5, mode: "box" } } },
           { name: "play_forecast_hours", selector: { number: { min: 0, max: 33, step: 0.5, mode: "box" } } },
+          { name: "play_forecast_until", selector: { time: { no_second: true } } },
           { name: "frame_duration", selector: { number: { min: 100, max: 1500, step: 50, mode: "box" } } },
           { name: "frame_stride", selector: { number: { min: 1, max: 6, step: 1, mode: "box" } } },
         ],
@@ -1300,7 +1313,10 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     if (!this._summaryEls) return;
     const playback =
       (data.autoplay_mode === "window"
-        ? `Window −${data.play_past_hours} h → +${data.play_forecast_hours} h`
+        ? `Window −${data.play_past_hours} h → +${data.play_forecast_hours} h` +
+          (data.play_forecast_until
+            ? ` or until ${String(data.play_forecast_until).slice(0, 5)}`
+            : "")
         : data.autoplay_mode === "full"
           ? "Full timeline on open"
           : "Autoplay off") +

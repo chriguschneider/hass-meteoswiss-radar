@@ -50,6 +50,7 @@ play the configured window (looping) -> play the full timeline.
 | `autoplay_mode` | `off` | `off`, `window` (play the configured window on open, looping) or `full` (play the whole timeline). |
 | `play_past_hours` | `1` | Play window: hours of history before now. |
 | `play_forecast_hours` | `8` | Play window: hours of forecast after now. |
+| `play_forecast_until` | – | Play window: clock time ("20:00") to play at least until — the longer of this and `play_forecast_hours` wins. |
 | `legend` | `true` | Show the intensity legend (mm/h) overlay on the map. |
 | `attribution` | `true` | Show the "Source: MeteoSwiss · © swisstopo" chip at the bottom center of the map. The swisstopo basemap license requires attribution — disable only for private use at your own discretion. |
 | `time_axis` | `true` | Hour and date label rows under the timeline track. |
