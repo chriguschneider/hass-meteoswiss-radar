@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.7.1";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -1084,11 +1084,11 @@ const EDITOR_LABELS = {
   zoom: "Initial zoom",
   frame_duration: "Frame duration (ms)",
   frame_stride: "Frame stride (play every Nth frame)",
-  past_hours: "Timeline: history (h)",
-  forecast_hours: "Timeline: forecast (h)",
+  past_hours: "Visible timeline: history (h)",
+  forecast_hours: "Visible timeline: forecast (h)",
   autoplay_mode: "Autoplay on open",
-  play_past_hours: "Play window: history (h)",
-  play_forecast_hours: "Play window: forecast (h)",
+  play_past_hours: "Autoplay window: history (h) — playback only",
+  play_forecast_hours: "Autoplay window: forecast (h) — playback only",
   legend: "Show legend",
   attribution: "Show attribution",
   time_axis: "Show time labels",
