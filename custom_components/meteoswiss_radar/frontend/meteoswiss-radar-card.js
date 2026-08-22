@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.5.1";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -236,7 +236,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       autoplay: false,
       legend: true,
       time_axis: true,
-      time_bubble: true,
       large_label: true,
       progress_bar: true,
       ...(config || {}),
@@ -355,7 +354,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         }
         #controls {
           display: flex; align-items: center; gap: 10px;
-          padding: ${c.time_bubble ? "30px" : "8px"} 12px 4px;
+          padding: 8px 12px 4px;
         }
         
         #play {
@@ -371,24 +370,6 @@ class MeteoSwissRadarCard extends HTMLElement {
           width: 100%; height: 28px; margin: 0; cursor: pointer;
           accent-color: var(--primary-color, #03a9f4); display: block;
         }
-        #bubble {
-          position: absolute; top: -26px; transform: translateX(-50%);
-          background: var(--card-background-color, #fff);
-          color: var(--primary-text-color, #333);
-          font-size: 12px; font-weight: 600; padding: 2px 8px;
-          border-radius: 5px; white-space: nowrap;
-          font-family: var(--primary-font-family, sans-serif);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-          pointer-events: none; z-index: 2;
-        }
-        #bubble[data-type="forecast"] { background: ${COLOR_FORECAST}; color: #4e342e; }
-        #bubble:after {
-          content: ""; position: absolute; left: 50%; bottom: -5px;
-          transform: translateX(-50%);
-          border: 5px solid transparent; border-bottom: none;
-          border-top-color: var(--card-background-color, #fff);
-        }
-        #bubble[data-type="forecast"]:after { border-top-color: ${COLOR_FORECAST}; }
         #axisrow {
           position: relative; height: 26px;
           margin: 2px 12px 0 12px;
@@ -482,12 +463,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._slider.addEventListener("input", (ev) =>
       this._onScrub(Number(ev.target.value))
     );
-    if (c.time_bubble) {
-      this._bubble = document.createElement("div");
-      this._bubble.id = "bubble";
-      this._bubble.hidden = true;
-      root.getElementById("sliderwrap").appendChild(this._bubble);
-    }
   }
 
   _createMap(L) {
@@ -870,7 +845,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._moveMarkers(idx);
   }
 
-  /* Slider, timebar progress, bubble, bars playhead and label for idx. */
+  /* Slider, timebar progress and label for idx. */
   _moveMarkers(idx) {
     const f = this._frames[idx];
     if (!f) return;
@@ -883,13 +858,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._tbDot.style.left = (frac * 100).toFixed(2) + "%";
       this._elapsed.hidden = false;
       this._tbDot.hidden = false;
-    }
-    if (this._bubble) {
-      const x = Math.min(94, Math.max(6, frac * 100));
-      this._bubble.style.left = x + "%";
-      this._bubble.textContent = `${weekdayShort(f.ts)} ${f.timepoint}`;
-      this._bubble.dataset.type = f.type;
-      this._bubble.hidden = false;
     }
   }
 
