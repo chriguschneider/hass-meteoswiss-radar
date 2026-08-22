@@ -3,7 +3,8 @@ name: Claude (scheduled backlog)
 # Time-driven: every 6 hours, pick the next open issue in priority order,
 # claim it, implement it on a branch, and open a DRAFT PR. Never merges,
 # never pushes to master. The model is chosen from the issue's labels.
-# Requires the ANTHROPIC_API_KEY secret. See docs/AUTOMATION.md.
+# Requires the CLAUDE_CODE_OAUTH_TOKEN secret (Claude subscription).
+# See docs/AUTOMATION.md.
 
 on:
   schedule:
@@ -57,7 +58,7 @@ jobs:
         if: steps.next.outputs.number != ''
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40"
           prompt: |
             You are working through the issue backlog of this repository,
