@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.6.4";
+const CARD_VERSION = "0.6.5";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -360,18 +360,22 @@ class MeteoSwissRadarCard extends HTMLElement {
           box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); pointer-events: none;
         }
         #hoursrow { position: relative; height: 15px; margin-top: 4px; }
+        #hoursrow .hsep {
+          position: absolute; top: 1px; height: 12px; width: 1px;
+          background: var(--secondary-text-color, #999); opacity: 0.35;
+        }
         #hoursrow b {
-          position: absolute; transform: translateX(-50%);
+          position: absolute; top: 1px;
           font-size: 11px; font-weight: 400;
           color: var(--secondary-text-color, #666); white-space: nowrap;
         }
         #datesrow { position: relative; height: 15px; }
         #datesrow .daysep {
-          position: absolute; top: -19px; bottom: 1px; width: 1px;
-          background: var(--secondary-text-color, #999); opacity: 0.5;
+          position: absolute; top: -19px; bottom: 1px; width: 1.5px;
+          background: var(--secondary-text-color, #999); opacity: 0.65;
         }
         #datesrow b {
-          position: absolute; transform: translateX(-50%);
+          position: absolute; top: 1px;
           font-size: 10.5px; font-weight: 700;
           color: var(--primary-text-color, #333); white-space: nowrap;
         }
@@ -649,8 +653,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._legendEl.hidden = false;
   }
 
-  /* Hour labels every 6 h in one row, date labels centered within each
-   * day's visible span in the row below. */
+  /* Hour labels sit right of a small separator at each 6-h mark; the date
+   * label sits right of the day-change line, which runs continuously from
+   * the bottom of the date row up through the hour row. */
   _buildTimelineLabels() {
     if (!this._config.time_axis || this._frames.length < 2) return;
     const frames = this._frames;
@@ -664,43 +669,50 @@ class MeteoSwissRadarCard extends HTMLElement {
       const d = new Date(t * 1000);
       if (d.getHours() % 6 !== 0) continue;
       const x = ((t - t0) / span) * 100;
-      if (x < 3 || x > 97) continue; // avoid clipped edge labels
+      if (x < 0.5 || x > 91) continue; // left-aligned labels need room
+      if (d.getHours() !== 0) {
+        // midnight gets the continuous day line instead of a short one
+        const sep = document.createElement("div");
+        sep.className = "hsep";
+        sep.style.left = x + "%";
+        this._hoursRow.appendChild(sep);
+      }
       const b = document.createElement("b");
-      b.style.left = x + "%";
+      b.style.left = `calc(${x.toFixed(2)}% + 4px)`;
       b.textContent = String(d.getHours()).padStart(2, "0") + ":00";
       this._hoursRow.appendChild(b);
     }
     let t = t0;
+    let first = true;
     while (t <= t1) {
       const ds = new Date(t * 1000);
       ds.setHours(0, 0, 0, 0);
       const dayStart = ds.getTime() / 1000;
       const dayEnd = dayStart + 86400;
-      if (dayStart > t0) {
-        const sep = document.createElement("div");
-        sep.className = "daysep";
-        sep.style.left = (((dayStart - t0) / span) * 100).toFixed(2) + "%";
-        this._datesRow.appendChild(sep);
-      }
       const visStart = Math.max(dayStart, t0);
       const visEnd = Math.min(dayEnd, t1);
       const width = ((visEnd - visStart) / span) * 100;
+      const x = ((visStart - t0) / span) * 100;
+      if (!first) {
+        const sep = document.createElement("div");
+        sep.className = "daysep";
+        sep.style.left = x + "%";
+        this._datesRow.appendChild(sep);
+      }
       if (width >= 4) {
-        const center = (((visStart + visEnd) / 2 - t0) / span) * 100;
         const d = new Date(visStart * 1000);
         const b = document.createElement("b");
-        b.style.left = center + "%";
+        b.style.left = first ? "0" : `calc(${x.toFixed(2)}% + 5px)`;
         b.textContent =
-          width < 12
+          width < 8
             ? weekdayShort(visStart)
             : weekdayShort(visStart) +
               " " +
               String(d.getDate()).padStart(2, "0") +
-              "." +
-              String(d.getMonth() + 1).padStart(2, "0") +
               ".";
         this._datesRow.appendChild(b);
       }
+      first = false;
       t = dayEnd;
     }
   }
