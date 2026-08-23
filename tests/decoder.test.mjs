@@ -1039,3 +1039,58 @@ describe("scrub pointercancel / lostpointercapture (issue #7)", () => {
     expect(card._trackScrubbing).toBe(false);
   });
 });
+
+describe("setConfig zoom and center validation (issue #8)", () => {
+  it("coerces zoom to a finite number and clamps to [6, 15]", () => {
+    const card = new MeteoSwissRadarCard();
+
+    card.setConfig({ zoom: 10 });
+    expect(card._config.zoom).toBe(10);
+
+    card.setConfig({ zoom: "8" });
+    expect(card._config.zoom).toBe(8);
+
+    card.setConfig({ zoom: 2 }); // below min
+    expect(card._config.zoom).toBe(8); // default
+
+    card.setConfig({ zoom: 16 }); // above max
+    expect(card._config.zoom).toBe(8); // default
+
+    card.setConfig({ zoom: "invalid" });
+    expect(card._config.zoom).toBe(8); // default
+
+    card.setConfig({ zoom: null });
+    expect(card._config.zoom).toBe(8); // default
+  });
+
+  it("accepts center only as array of 2 finite numbers", () => {
+    const card = new MeteoSwissRadarCard();
+
+    card.setConfig({ center: [47.5, 8.5] });
+    expect(card._config.center).toEqual([47.5, 8.5]);
+
+    card.setConfig({ center: ["47.5", "8.5"] }); // coerce strings to numbers
+    expect(card._config.center).toEqual([47.5, 8.5]);
+
+    card.setConfig({ center: "Bern" }); // not an array
+    expect(card._config.center).toBeUndefined(); // falls back in _createMap
+
+    card.setConfig({ center: [47.5] }); // wrong length
+    expect(card._config.center).toBeUndefined();
+
+    card.setConfig({ center: [47.5, 8.5, 1000] }); // too many elements
+    expect(card._config.center).toBeUndefined();
+
+    card.setConfig({ center: ["47.5", "invalid"] }); // non-numeric string
+    expect(card._config.center).toBeUndefined();
+
+    card.setConfig({ center: [NaN, 8.5] }); // NaN is not finite
+    expect(card._config.center).toBeUndefined();
+
+    card.setConfig({ center: [Infinity, 8.5] }); // Infinity is not finite
+    expect(card._config.center).toBeUndefined();
+
+    card.setConfig({ center: null });
+    expect(card._config.center).toBeUndefined();
+  });
+});

@@ -258,6 +258,22 @@ class MeteoSwissRadarCard extends HTMLElement {
     if ((config || {}).autoplay === true && !(config || {}).autoplay_mode) {
       this._config.autoplay_mode = "full"; // legacy autoplay: true
     }
+    // Validate and coerce zoom to [6, 15], default 8
+    const z = Number(this._config.zoom);
+    this._config.zoom = Number.isFinite(z) && z >= 6 && z <= 15 ? z : 8;
+    // Validate center: must be array of exactly 2 finite numbers; coerce to numbers
+    const c = this._config.center;
+    if (Array.isArray(c) && c.length === 2) {
+      const lat = Number(c[0]);
+      const lng = Number(c[1]);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        this._config.center = [lat, lng];
+      } else {
+        delete this._config.center; // will fall back to home coords in _createMap
+      }
+    } else {
+      delete this._config.center; // will fall back to home coords in _createMap
+    }
     // Editor preview: HA re-runs setConfig on the live element for every
     // keystroke. Apply display-only changes in place so the preview updates
     // without recreating the element (which re-ran Leaflet + a full data load
