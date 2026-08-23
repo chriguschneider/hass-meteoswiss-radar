@@ -110,8 +110,11 @@ function decodeFrame(frame) {
   }));
 }
 
+// One formatter instance reused across all calls avoids re-parsing the locale
+// option bag and allocating a new Intl.DateTimeFormat on every frame tick.
+const _weekdayFmt = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
 function weekdayShort(ts) {
-  return new Date(ts * 1000).toLocaleDateString("en-GB", { weekday: "short" });
+  return _weekdayFmt.format(new Date(ts * 1000));
 }
 
 /* Canvas layer that caches projected Path2D sets per frame and view.
@@ -423,8 +426,8 @@ class MeteoSwissRadarCard extends HTMLElement {
           font-family: var(--primary-font-family, sans-serif);
           opacity: 0.95; pointer-events: none;
         }
-        #label .l1 { font-size: ${c.large_label ? "15px" : "12px"};
-          font-weight: ${c.large_label ? "700" : "600"}; }
+        #label .l1 { font-size: 12px; font-weight: 600; }
+        #label.large .l1 { font-size: 15px; font-weight: 700; }
         #label .l2 { font-size: 11px; opacity: 0.9; }
         #label[data-type="forecast"] {
           background: #c1eafc; color: #01579b;
@@ -539,7 +542,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       <ha-card>
         <div class="wrap">
           <div id="map"></div>
-          <div id="label" hidden></div>
+          <div id="label" hidden><div id="label-l1" class="l1"></div><div id="label-l2" class="l2" hidden></div></div>
           <div id="banner" hidden></div>
           <button id="play" aria-label="Play/Pause" hidden>${PLAY_SVG}</button>
           <div id="legend" hidden>
@@ -566,6 +569,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       </ha-card>
     `;
     this._label = root.getElementById("label");
+    this._labelL1 = root.getElementById("label-l1");
+    this._labelL2 = root.getElementById("label-l2");
     this._banner = root.getElementById("banner");
     this._timeline = root.getElementById("timeline");
     this._trackWrap = root.getElementById("trackwrap");
@@ -703,6 +708,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!frames.length) throw new Error("no frames in animation.json");
 
     frames = this._applyTimeSpan(frames);
+    for (const f of frames) {
+      f.shortLabel = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
+    }
 
     const prevTs = this._frames[this._frameIndex]
       ? this._frames[this._frameIndex].ts
@@ -1187,9 +1195,21 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _prefetch(idx) {
     const s = this._strideN();
-    for (let k = 1; k <= PREFETCH_AHEAD; k++) {
-      const f = this._frames[(idx + k * s) % this._frames.length];
-      if (f) this._ensureFrame(f.url).catch(() => {});
+    if (this._playMode === "window" && this._winEnd !== undefined) {
+      // In window mode wrap within [_winStart, _winEnd] so near the window end
+      // we warm the loop-start frames instead of out-of-window frames.
+      const len = this._winEnd - this._winStart + 1;
+      if (len <= 0) return;
+      for (let k = 1; k <= PREFETCH_AHEAD; k++) {
+        const pos = ((idx - this._winStart + k * s) % len + len) % len;
+        const f = this._frames[this._winStart + pos];
+        if (f) this._ensureFrame(f.url).catch(() => {});
+      }
+    } else {
+      for (let k = 1; k <= PREFETCH_AHEAD; k++) {
+        const f = this._frames[(idx + k * s) % this._frames.length];
+        if (f) this._ensureFrame(f.url).catch(() => {});
+      }
     }
   }
 
@@ -1218,19 +1238,16 @@ class MeteoSwissRadarCard extends HTMLElement {
     const f = this._frames[this._frameIndex];
     if (!f || !this._label) return;
     const type = f.type === "measurement" ? "Measurement" : "Forecast";
-    if (this._config.large_label) {
-      this._label.textContent = "";
-      const l1 = document.createElement("div");
-      l1.className = "l1";
-      l1.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
-      const l2 = document.createElement("div");
-      l2.className = "l2";
-      l2.textContent = type;
-      this._label.appendChild(l1);
-      this._label.appendChild(l2);
-    } else {
-      // Compact label: the chip color already tells measurement vs forecast.
-      this._label.textContent = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
+    // shortLabel is precomputed at manifest-parse time; fall back for safety.
+    const mainText = f.shortLabel || `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
+    const large = !!this._config.large_label;
+    this._label.classList.toggle("large", large);
+    // Only write textContent when the value actually changed to avoid layout thrash.
+    if (this._labelL1 && this._labelL1.textContent !== mainText) this._labelL1.textContent = mainText;
+    if (this._labelL2) {
+      this._labelL2.hidden = !large;
+      // Compact label: chip color already tells measurement vs forecast.
+      if (large && this._labelL2.textContent !== type) this._labelL2.textContent = type;
     }
     this._label.dataset.type = f.type;
     this._label.hidden = false;
