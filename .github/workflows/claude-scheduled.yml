@@ -1,14 +1,21 @@
 name: Claude (scheduled backlog)
 
-# Time-driven: every 6 hours, pick the next open issue in priority order,
-# claim it, implement it on a branch, and open a DRAFT PR. Never merges,
-# never pushes to master. The model is chosen from the issue's labels.
-# Requires the CLAUDE_CODE_OAUTH_TOKEN secret (Claude subscription).
-# See docs/AUTOMATION.md.
+# Picks the next open issue in priority order, claims it, implements it on a
+# branch, and opens a DRAFT PR. Never merges, never pushes to master. The model
+# is chosen from the issue's labels. Requires the CLAUDE_CODE_OAUTH_TOKEN
+# secret (Claude subscription). See docs/AUTOMATION.md.
+#
+# Runs when:
+# - you merge an agent draft PR (`claude/*`) -> the next issue starts
+#   immediately, so the backlog is paced by YOUR review (one open PR at a time),
+# - once a day as a safety heartbeat,
+# - or manually via the Actions tab ("Run workflow").
 
 on:
+  pull_request:
+    types: [closed]
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 8 * * *" # daily heartbeat (fallback if nothing was merged)
   workflow_dispatch: # allow a manual "run now" from the Actions tab
 
 concurrency:
@@ -17,6 +24,12 @@ concurrency:
 
 jobs:
   work-next-issue:
+    # For merges: only advance when an agent PR (claude/*) actually merged.
+    # For schedule / manual: always run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'claude/'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
