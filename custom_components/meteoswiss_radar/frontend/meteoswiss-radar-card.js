@@ -619,10 +619,20 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._renderLegend(animation.legend);
     this._buildTimelineLabels();
 
-    // Keep the playhead on the same moment across a manifest rollover.
+    // Keep the playhead on the same moment across a manifest rollover, and
+    // redraw so a paused card stops showing the previous version's imagery:
+    // RadarLayer keeps rendering the last url it was handed, so re-anchoring
+    // the label/knob alone leaves stale pixels under a moved marker.
     if (prevTs != null) {
-      this._frameIndex = this._nearestIndexByTs(prevTs);
-      this._moveMarkers(this._frameIndex);
+      const idx = this._reanchorIndex(prevTs);
+      if (this._playing) {
+        // Playback redraws every tick in its advance loop; a jump here would
+        // fight it, so only re-anchor the markers and let the loop continue.
+        this._frameIndex = idx;
+        this._moveMarkers(idx);
+      } else {
+        this._jumpTo(idx); // ensures + shows the frame and prefetches
+      }
     }
     if (this._playMode === "window") this._computeWindow();
   }
@@ -741,6 +751,23 @@ class MeteoSwissRadarCard extends HTMLElement {
       if (this._frames[i].type === "measurement") return i;
     }
     return this._frames.length - 1;
+  }
+
+  // Where the playhead lands after a manifest rollover. Usually the frame
+  // nearest the moment we were showing. But a card paused for hours can sit
+  // on a moment that has since scrolled off the (trimmed) timeline; the
+  // nearest frame is then an unrelated edge frame, so a paused card snaps to
+  // the latest measurement rather than showing a stale-but-wrong moment. A
+  // playing card always tracks the nearest frame so its advance loop resumes
+  // from the same position.
+  _reanchorIndex(prevTs) {
+    const nearest = this._nearestIndexByTs(prevTs);
+    if (this._playing) return nearest;
+    const first = this._frames[0];
+    const last = this._frames[this._frames.length - 1];
+    if (!first || !last) return nearest;
+    if (prevTs < first.ts || prevTs > last.ts) return this._lastMeasurementIndex();
+    return nearest;
   }
 
   _nearestIndexByTs(ts) {
