@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Emit the next open issue to work on, in priority order (P1 > P2 > P3).
+# Emit the next open issue for the autopilot, in priority order (P1 > P2 > P3).
 #
-# Skips: issues already assigned to someone, issues carrying the
-# `agent:in-progress` label (claimed by a previous run), and the tracking
-# issue (title starting "Tracking:"). Within a priority, lowest number first.
+# Only issues carrying a P-label are eligible (so tests/CI/tracking issues
+# without one are left for a human). Skips: the tracking issue, and issues
+# already flagged `agent:go`, `agent:in-progress` or `needs-verification`.
+# Lowest number first within a priority.
 #
-# Prints `number=<n>` (empty if nothing eligible) on stdout; append to
-# $GITHUB_OUTPUT. Diagnostics on stderr.
+# Prints `number=<n>` (empty if nothing eligible) on stdout.
 set -euo pipefail
 
 issues="$(gh issue list --state open --limit 100 \
@@ -16,7 +16,7 @@ pick() {
   local prio="$1"
   printf '%s' "$issues" | jq -r --arg prio "$prio" '
     map(select(.assignees | length == 0))
-    | map(select([.labels[].name] | index("agent:in-progress") | not))
+    | map(select([.labels[].name] | any(. == "agent:in-progress" or . == "agent:go" or . == "needs-verification") | not))
     | map(select(.title | test("^Tracking:") | not))
     | map(select([.labels[].name] | index($prio)))
     | sort_by(.number)
