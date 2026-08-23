@@ -463,6 +463,68 @@ describe("transient-failure recovery (issue #2)", () => {
   });
 });
 
+describe("first-frame failure recovery (issue #5)", () => {
+  // A bare instance with _refreshManifest stubbed so _loadData can run end-to-end
+  // without real HTTP, exercising only the _dataReady / timeline visibility fix.
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._frames = [];
+    card._config = { autoplay_mode: "off" };
+
+    // Manifest stub: fills _frames and resolves immediately.
+    card._refreshManifest = async () => {
+      card._frames = [{ url: "frame-0", type: "measurement", ts: 0 }];
+      card._animVersion = "v1";
+    };
+
+    // DOM stubs for elements that _loadData reveals.
+    card._timeline = { hidden: true };
+    card._playBtn = { hidden: true };
+
+    card._showFrame = () => {};
+    card._prefetch = () => {};
+    card._hideBanner = () => {};
+    card._showBanner = () => {};
+
+    return card;
+  }
+
+  it("leaves _dataReady false when the first frame fetch throws", async () => {
+    const card = makeCard();
+    card._api = () => Promise.reject(new Error("502 transient"));
+
+    await expect(card._loadData()).rejects.toThrow("502 transient");
+
+    expect(card._dataReady).toBe(false);
+    expect(card._timeline.hidden).toBe(true);
+    expect(card._playBtn.hidden).toBe(true);
+  });
+
+  it("recovers on the next _loadData call once the frame succeeds", async () => {
+    const card = makeCard();
+    let calls = 0;
+    card._api = () => {
+      calls++;
+      if (calls === 1) return Promise.reject(new Error("502 transient"));
+      return Promise.resolve({ coords: GRID, areas: [] });
+    };
+
+    // First attempt: frame fails.
+    await expect(card._loadData()).rejects.toThrow();
+    expect(card._dataReady).toBe(false);
+
+    // Simulate the backoff window having elapsed before the timer retries.
+    card._retryAfter.set("frame-0", Date.now() - 1);
+
+    // Second attempt (simulates the timer retry): frame succeeds.
+    await card._loadData();
+
+    expect(card._dataReady).toBe(true);
+    expect(card._timeline.hidden).toBe(false);
+    expect(card._playBtn.hidden).toBe(false);
+  });
+});
+
 describe("editor prunes default values from config (issue #4)", () => {
   // A bare editor is enough: _emit touches only _config plus the two
   // side-effects we stub (form refresh + the config-changed dispatch).

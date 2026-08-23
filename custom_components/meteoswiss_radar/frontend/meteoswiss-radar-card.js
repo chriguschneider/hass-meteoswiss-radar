@@ -646,7 +646,6 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   async _loadData() {
     await this._refreshManifest(true);
-    this._dataReady = true;
     this._hideBanner();
     const idx = this._lastMeasurementIndex();
     await this._ensureFrame(this._frames[idx].url);
@@ -654,6 +653,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._prefetch(idx);
     this._timeline.hidden = false;
     this._playBtn.hidden = false;
+    // Set only after the first frame is confirmed shown so a failed frame
+    // fetch keeps _dataReady false and the timer retries the full _loadData.
+    this._dataReady = true;
     const mode = this._config.autoplay_mode;
     if ((mode === "window" || mode === "full") && !this._autoplayStarted) {
       this._autoplayStarted = true;
@@ -890,6 +892,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       } catch (err) {
         // Degraded state stays; next tick retries. Existing frames keep
         // playing from cache even when the manifest refresh fails.
+        // Re-show the banner if the retry _loadData also fails mid-fetch
+        // (e.g. frame 502 after manifest succeeded) so the user sees it.
+        if (!this._dataReady) this._showBanner("Radar data is currently unavailable");
       }
     }, REFRESH_INTERVAL_MS);
   }
