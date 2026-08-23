@@ -603,6 +603,14 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._trackWrap.addEventListener("pointerup", () => {
       this._trackScrubbing = false;
     });
+    // A cancelled touch (palm rejection, system gesture) fires pointercancel /
+    // lostpointercapture instead of pointerup, leaving _trackScrubbing stuck.
+    this._trackWrap.addEventListener("pointercancel", () => {
+      this._trackScrubbing = false;
+    });
+    this._trackWrap.addEventListener("lostpointercapture", () => {
+      this._trackScrubbing = false;
+    });
   }
 
   _createMap(L) {
