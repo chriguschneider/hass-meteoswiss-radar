@@ -71,6 +71,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # A bot auto-merge can trigger this run; allow the bot actor so the
+          # implement step isn't blocked by the default non-human-actor guard.
+          allowed_bots: "claude"
           claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40 --dangerously-skip-permissions"
           prompt: |
             You are working, unattended, on GitHub issue
