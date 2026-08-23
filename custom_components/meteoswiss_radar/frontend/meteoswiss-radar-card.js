@@ -880,7 +880,11 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (this._refreshTimer) clearInterval(this._refreshTimer);
     this._refreshTimer = setInterval(async () => {
       try {
-        if (this._dataReady) {
+        // _dataReady is set to true after the manifest loads but before the
+        // first frame fetch. If that fetch failed, _timeline stays hidden.
+        // Detect the frameless state and rerun the full load so the card
+        // can recover without waiting for a topology change.
+        if (this._dataReady && !this._timeline.hidden) {
           await this._refreshManifest(false);
         } else {
           await this._loadData(); // initial load failed — keep retrying

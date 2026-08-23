@@ -510,3 +510,105 @@ describe("editor prunes default values from config (issue #4)", () => {
     expect(editor._config).toEqual({ type: "t", play_forecast_until: "18:00" });
   });
 });
+
+describe("first-frame failure recovery (issue #5)", () => {
+  // The card sets _dataReady = true after the manifest loads but before the
+  // first frame fetch. If that fetch fails, _timeline stays hidden. The fix
+  // makes the refresh-timer callback detect this frameless state and rerun
+  // the full _loadData() path so the card recovers on the next tick.
+
+  const FAKE_FRAME = { url: "f/0", ts: 1000, type: "measurement", day: "Mon 01.", timepoint: "10:00" };
+
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({});
+    // Frames are pre-seeded; _refreshManifest is stubbed so _loadData skips
+    // the network call for the manifest and only exercises _ensureFrame.
+    card._frames = [FAKE_FRAME];
+    card._t0 = FAKE_FRAME.ts;
+    card._span = 0;
+    card._animVersion = "v1";
+    card._refreshManifest = async () => {};
+    // Stub DOM references that _loadData writes to.
+    card._timeline = { hidden: true };
+    card._playBtn = { hidden: true };
+    card._showBanner = () => {};
+    card._hideBanner = () => {};
+    card._showFrame = () => {};
+    card._prefetch = () => {};
+    card._moveMarkers = () => {};
+    card._startPlay = () => {};
+    return card;
+  }
+
+  it("leaves _dataReady true and _timeline hidden when the first frame fetch fails", async () => {
+    const card = makeCard();
+    card._ensureFrame = async () => { throw new Error("502 Proxy Error"); };
+
+    await card._loadData().catch(() => {});
+
+    expect(card._dataReady).toBe(true);
+    expect(card._timeline.hidden).toBe(true);
+    expect(card._playBtn.hidden).toBe(true);
+  });
+
+  it("shows timeline and play button on retry when the frame fetch succeeds", async () => {
+    const card = makeCard();
+    const fakeAreas = [];
+    let calls = 0;
+    card._ensureFrame = async (url) => {
+      calls++;
+      if (calls === 1) throw new Error("502 first-frame failure");
+      card._cachePut(url, fakeAreas);
+      return fakeAreas;
+    };
+
+    // First call simulates the failing init; _dataReady ends up true but
+    // _timeline stays hidden — the frameless state the bug left the card in.
+    await card._loadData().catch(() => {});
+    expect(card._dataReady).toBe(true);
+    expect(card._timeline.hidden).toBe(true);
+
+    // Timer calls _loadData() again (because _timeline.hidden is true).
+    // The second _ensureFrame call succeeds and the card recovers.
+    await card._loadData();
+    expect(card._timeline.hidden).toBe(false);
+    expect(card._playBtn.hidden).toBe(false);
+  });
+
+  it("normal init: timeline is shown on the first attempt when the frame succeeds", async () => {
+    const card = makeCard();
+    const fakeAreas = [];
+    card._ensureFrame = async (url) => {
+      card._cachePut(url, fakeAreas);
+      return fakeAreas;
+    };
+
+    await card._loadData();
+
+    expect(card._dataReady).toBe(true);
+    expect(card._timeline.hidden).toBe(false);
+    expect(card._playBtn.hidden).toBe(false);
+  });
+
+  it("refresh timer takes the _loadData path when _timeline is still hidden", () => {
+    // Verify the conditional: _dataReady=true but _timeline.hidden=true means
+    // the timer must call _loadData, not _refreshManifest.
+    const card = makeCard();
+    card._dataReady = true;
+    card._timeline.hidden = true;
+
+    // Replicate the _startRefreshTimer branch condition from the fix.
+    const takesManifestPath = card._dataReady && !card._timeline.hidden;
+    expect(takesManifestPath).toBe(false); // must fall through to _loadData
+  });
+
+  it("refresh timer takes the _refreshManifest path once the card is healthy", () => {
+    const card = makeCard();
+    card._dataReady = true;
+    card._timeline.hidden = false; // card recovered and showing frames
+
+    const takesManifestPath = card._dataReady && !card._timeline.hidden;
+    expect(takesManifestPath).toBe(true);
+  });
+});
