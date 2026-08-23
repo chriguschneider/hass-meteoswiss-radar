@@ -9,8 +9,11 @@ The integration has no entities. It provides:
 
 from __future__ import annotations
 
+import asyncio
+import collections
 import logging
 import re
+import time
 from pathlib import Path
 
 from aiohttp import ClientError, ClientTimeout, web
@@ -45,6 +48,8 @@ _ALLOWED_PATHS = (
 
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
+_VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
+_LRU_MAX = 50  # max immutable-frame entries (~5 MB at typical frame size)
 
 
 class MeteoSwissRadarProxyView(HomeAssistantView):
@@ -56,11 +61,85 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
+        # TTL cache for versions.json: (monotonic_time, body) or None.
+        self._versions_cache: tuple[float, bytes] | None = None
+        # LRU for immutable frames (animation manifest + radar/inca frames).
+        self._lru: collections.OrderedDict[str, bytes] = collections.OrderedDict()
+        # In-flight futures: tail → Future[(int, bytes|None)] deduplicates
+        # concurrent requests for the same URL into one upstream fetch.
+        self._inflight: dict[str, asyncio.Future] = {}
 
     async def get(self, request: web.Request, tail: str) -> web.Response:
         if not any(rx.fullmatch(tail) for rx in _ALLOWED_PATHS):
             return web.Response(status=404)
 
+        # Join an existing in-flight fetch rather than opening a second upstream.
+        if tail in self._inflight:
+            status, body = await asyncio.shield(self._inflight[tail])
+            return self._build_response(tail, status, body)
+
+        # Cache hit: no upstream request needed.
+        cached = self._cache_get(tail)
+        if cached is not None:
+            return self._build_response(tail, 200, cached)
+
+        # Cache miss: fetch from upstream, protected by an in-flight Future so
+        # any concurrent arrivals for the same tail join this fetch.
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._inflight[tail] = fut
+        result: tuple[int, bytes | None]
+        try:
+            result = await self._fetch(tail)
+            if not fut.done():
+                fut.set_result(result)
+        except asyncio.CancelledError:
+            if not fut.done():
+                fut.cancel()
+            raise
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            self._inflight.pop(tail, None)
+
+        status, body = result
+        if status == 200 and body is not None:
+            self._cache_put(tail, body)
+        return self._build_response(tail, status, body)
+
+    # ------------------------------------------------------------------
+    # Cache
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, tail: str) -> bytes | None:
+        if tail.endswith("versions.json"):
+            if self._versions_cache is not None:
+                ts, body = self._versions_cache
+                if time.monotonic() - ts < _VERSIONS_TTL:
+                    return body
+            return None
+        if tail in self._lru:
+            self._lru.move_to_end(tail)
+            return self._lru[tail]
+        return None
+
+    def _cache_put(self, tail: str, body: bytes) -> None:
+        if tail.endswith("versions.json"):
+            self._versions_cache = (time.monotonic(), body)
+        else:
+            self._lru[tail] = body
+            self._lru.move_to_end(tail)
+            while len(self._lru) > _LRU_MAX:
+                self._lru.popitem(last=False)
+
+    # ------------------------------------------------------------------
+    # Upstream fetch
+    # ------------------------------------------------------------------
+
+    async def _fetch(self, tail: str) -> tuple[int, bytes | None]:
+        """Fetch *tail* from upstream. Always returns (status, body_or_None)."""
         session = async_get_clientsession(self._hass)
         try:
             async with session.get(
@@ -74,18 +153,18 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                     _LOGGER.warning(
                         "Upstream %s redirected (%s)", tail, resp.status
                     )
-                    return web.Response(status=502)
+                    return (502, None)
                 # 404 passes through unchanged: the card's manifest-rollover
                 # logic depends on detecting it via _is404().
                 if resp.status == 404:
-                    return web.Response(status=404)
+                    return (404, None)
                 # Relay upstream 401/403/5xx as 502 so the HA frontend does
                 # not mistake them for HA auth failures or trigger retries.
                 if resp.status != 200:
                     _LOGGER.warning(
                         "Upstream %s returned HTTP %s", tail, resp.status
                     )
-                    return web.Response(status=502)
+                    return (502, None)
                 if "json" not in resp.headers.get("Content-Type", ""):
                     # A site relaunch serving HTML with 200 must not reach
                     # the card as a "valid" response.
@@ -94,7 +173,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                         tail,
                         resp.headers.get("Content-Type"),
                     )
-                    return web.Response(status=502)
+                    return (502, None)
                 chunks: list[bytes] = []
                 total = 0
                 async for chunk in resp.content.iter_chunked(65536):
@@ -103,16 +182,25 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                         _LOGGER.warning(
                             "Upstream %s body exceeds %d bytes", tail, _MAX_BODY_BYTES
                         )
-                        return web.Response(status=502)
+                        return (502, None)
                     chunks.append(chunk)
-                body = b"".join(chunks)
+                return (200, b"".join(chunks))
         except TimeoutError:
             _LOGGER.warning("Upstream request %s timed out", tail)
-            return web.Response(status=504)
+            return (504, None)
         except ClientError as err:
             _LOGGER.warning("Upstream request %s failed: %s", tail, err)
-            return web.Response(status=502)
+            return (502, None)
 
+    # ------------------------------------------------------------------
+    # Response builder
+    # ------------------------------------------------------------------
+
+    def _build_response(
+        self, tail: str, status: int, body: bytes | None
+    ) -> web.Response:
+        if status != 200 or body is None:
+            return web.Response(status=status)
         # versions.json must stay fresh; everything else is version- or
         # timestamp-pinned and therefore immutable.
         cache = (
@@ -120,12 +208,14 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             if tail.endswith("versions.json")
             else "public, max-age=86400, immutable"
         )
-        return web.Response(
+        resp = web.Response(
             body=body,
             content_type="application/json",
             charset="utf-8",
             headers={"Cache-Control": cache},
         )
+        resp.enable_compression()
+        return resp
 
 
 class MeteoSwissRadarCardView(HomeAssistantView):

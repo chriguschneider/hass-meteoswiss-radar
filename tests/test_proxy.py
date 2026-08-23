@@ -1,4 +1,4 @@
-"""Unit tests for MeteoSwissRadarProxyView hardening (issue #10).
+"""Unit tests for MeteoSwissRadarProxyView hardening and caching (issues #10, #11).
 
 These tests run with stdlib + pytest only (no aiohttp, no HA installed):
 sys.modules is patched before importing the component so all HA/aiohttp
@@ -37,6 +37,10 @@ class _FakeResponse:
         self.status = status
         self.body = body
         self._explicit_headers = headers or {}
+        self.compression_enabled = False
+
+    def enable_compression(self) -> None:
+        self.compression_enabled = True
 
     def __repr__(self) -> str:
         return f"_FakeResponse(status={self.status})"
@@ -91,7 +95,9 @@ for _name, _mod in _STUBS.items():
 # Import after stubs are in place.
 from custom_components.meteoswiss_radar import (  # noqa: E402
     MeteoSwissRadarProxyView,
+    _LRU_MAX,
     _MAX_BODY_BYTES,
+    _VERSIONS_TTL,
 )
 
 # Shorthand used in every test.
@@ -100,6 +106,7 @@ _ANIMATION_TAIL = (
     "product/output/precipitation/animation"
     "/version__20240101_1200/en/animation.json"
 )
+_RADAR_TAIL = "product/output/radar/rzc/radar_rzc.20240101_1200.json"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +141,33 @@ def _fake_upstream(
     session = MagicMock()
     session.get = _cm
     return session
+
+
+def _counting_upstream(
+    body: bytes = b"{}",
+    delay: bool = False,
+) -> tuple[object, list]:
+    """Upstream mock that records the number of times it was called."""
+    calls: list = []
+
+    class _FakeContent:
+        async def iter_chunked(self, size: int):  # noqa: ANN001
+            yield body
+
+    @asynccontextmanager
+    async def _cm(*_a, **_kw):
+        calls.append(1)
+        if delay:
+            await asyncio.sleep(0)  # yield so a second coroutine can start
+        resp = MagicMock()
+        resp.status = 200
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = _FakeContent()
+        yield resp
+
+    session = MagicMock()
+    session.get = _cm
+    return session, calls
 
 
 def _inject_session(view: MeteoSwissRadarProxyView, session: object) -> None:
@@ -303,3 +337,140 @@ def test_200_json_animation_tail_returns_200() -> None:
     _inject_session(v, _fake_upstream(body=b'{"frames": []}'))
     resp = _get(v, _ANIMATION_TAIL)
     assert resp.status == 200
+
+
+# ---------------------------------------------------------------------------
+# Tests: compression
+# ---------------------------------------------------------------------------
+
+def test_200_response_has_compression_enabled() -> None:
+    v = _view()
+    _inject_session(v, _fake_upstream(body=b'{"foo": 1}'))
+    resp = _get(v, _VERSIONS_TAIL)
+    assert resp.status == 200
+    assert resp.compression_enabled
+
+
+def test_error_response_does_not_call_enable_compression() -> None:
+    v = _view()
+    _inject_session(v, _fake_upstream(status=502))
+    resp = _get(v, _VERSIONS_TAIL)
+    assert resp.status == 502
+    assert not resp.compression_enabled
+
+
+# ---------------------------------------------------------------------------
+# Tests: in-flight deduplication
+# ---------------------------------------------------------------------------
+
+def test_concurrent_requests_for_same_frame_produce_one_upstream_fetch() -> None:
+    """Two concurrent GETs for the same immutable frame → exactly one upstream fetch."""
+    session, calls = _counting_upstream(body=b'{"frames": []}', delay=True)
+
+    async def _run() -> None:
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+        results = await asyncio.gather(
+            v.get(request, _ANIMATION_TAIL),
+            v.get(request, _ANIMATION_TAIL),
+        )
+        assert all(r.status == 200 for r in results)
+
+    asyncio.run(_run())
+    assert len(calls) == 1, f"expected 1 upstream fetch, got {len(calls)}"
+
+
+def test_concurrent_requests_for_versions_json_produce_one_upstream_fetch() -> None:
+    """Two concurrent GETs for versions.json → exactly one upstream fetch."""
+    session, calls = _counting_upstream(body=b'{"version": 1}', delay=True)
+
+    async def _run() -> None:
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+        results = await asyncio.gather(
+            v.get(request, _VERSIONS_TAIL),
+            v.get(request, _VERSIONS_TAIL),
+        )
+        assert all(r.status == 200 for r in results)
+
+    asyncio.run(_run())
+    assert len(calls) == 1, f"expected 1 upstream fetch, got {len(calls)}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: versions.json TTL cache
+# ---------------------------------------------------------------------------
+
+def test_versions_json_cache_hit_within_ttl() -> None:
+    """Second request within TTL window does not hit upstream."""
+    session, calls = _counting_upstream(body=b'{"version": 1}')
+    v = _view()
+    _inject_session(v, session)
+
+    _get(v, _VERSIONS_TAIL)
+    _get(v, _VERSIONS_TAIL)
+
+    assert len(calls) == 1, "expected cache hit on second request"
+
+
+def test_versions_json_cache_miss_after_ttl() -> None:
+    """Second request after TTL expiry re-fetches from upstream."""
+    session, calls = _counting_upstream(body=b'{"version": 1}')
+    v = _view()
+    _inject_session(v, session)
+
+    _get(v, _VERSIONS_TAIL)
+
+    # Expire the cache by back-dating its timestamp.
+    ts, body = v._versions_cache
+    v._versions_cache = (ts - _VERSIONS_TTL - 1.0, body)
+
+    _get(v, _VERSIONS_TAIL)
+
+    assert len(calls) == 2, "expected upstream re-fetch after TTL expiry"
+
+
+# ---------------------------------------------------------------------------
+# Tests: LRU cache for immutable frames
+# ---------------------------------------------------------------------------
+
+def test_immutable_frame_cache_hit() -> None:
+    """Second request for the same frame uses the LRU cache."""
+    session, calls = _counting_upstream(body=b'{"frames": []}')
+    v = _view()
+    _inject_session(v, session)
+
+    _get(v, _ANIMATION_TAIL)
+    _get(v, _ANIMATION_TAIL)
+
+    assert len(calls) == 1, "expected LRU cache hit on second request"
+
+
+def test_lru_evicts_oldest_entry_when_full() -> None:
+    """Inserting beyond _LRU_MAX entries evicts the least-recently-used entry."""
+    v = _view()
+    # Fill the LRU with synthetic entries directly.
+    for i in range(_LRU_MAX):
+        tail = f"product/output/radar/rzc/radar_rzc.2024010{i // 10}_{i:04d}.json"
+        v._lru[tail] = b"{}"
+
+    assert len(v._lru) == _LRU_MAX
+    first_tail = next(iter(v._lru))
+
+    # Add one more via cache_put using a valid immutable tail.
+    new_tail = "product/output/radar/rzc/radar_rzc.20241231_2359.json"
+    v._cache_put(new_tail, b'{"new": true}')
+
+    assert len(v._lru) <= _LRU_MAX, "LRU exceeded max size"
+    assert first_tail not in v._lru, "oldest entry was not evicted"
+    assert new_tail in v._lru, "new entry missing from LRU"
+
+
+def test_lru_does_not_cache_versions_json() -> None:
+    """versions.json must not enter the LRU; it has its own TTL cache."""
+    v = _view()
+    v._cache_put(_VERSIONS_TAIL, b'{"version": 1}')
+    assert _VERSIONS_TAIL not in v._lru
+    assert v._versions_cache is not None
