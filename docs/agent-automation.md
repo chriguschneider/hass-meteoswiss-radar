@@ -33,11 +33,26 @@ collaborators (comment events carry secrets, so strangers can't trigger it).
 
 ## Guardrails
 
-- Draft PRs only; **merge stays manual**.
 - The agent **cannot change `.github/workflows/`** (token lacks `workflows`
   permission) — a deliberate safety boundary; it documents such changes for
   a human instead.
 - Ambiguous issue → draft with a "Blocked / needs decision" note, no guessing.
+
+## Automated review + auto-merge (experimental, this repo only)
+
+`claude-review.yml` runs an **independent Opus reviewer** on every agent
+draft PR (`claude/*`). It reviews adversarially, runs the tests, fixes
+substantive problems on the branch (**at most 3 rounds**), then either:
+
+- **auto-merges** (`gh pr merge --auto --squash`) when green and solid, or
+- **holds for you** when the change needs live Home Assistant / visual
+  verification, when the PR or its issue carries the **`needs-verification`**
+  label, or when it could not make the change solid — it then labels the PR
+  `needs-verification` and comments exactly what to check.
+
+To force a human check on anything, add the **`needs-verification`** label to
+the issue or PR. Auto-merge respects branch protection (required checks pass
+first). Reviewer = Opus, author = Sonnet, so it is not grading its own work.
 
 ## Setup (one-time)
 
