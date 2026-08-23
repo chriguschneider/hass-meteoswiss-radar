@@ -59,14 +59,14 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -1149,5 +1149,131 @@ describe("setConfig zoom and center validation (issue #8)", () => {
 
     card.setConfig({ center: null });
     expect(card._config.center).toBeUndefined();
+  });
+});
+
+describe("byte-bounded decode cache (issue #52)", () => {
+  // Build a decoded areas value whose rings contribute a known number of bytes.
+  // Each Float32Array element is 4 bytes; length 4 = 2 vertices * 2 floats = 16 bytes.
+  function makeAreas(nRings, floatsPerRing) {
+    return [
+      {
+        color: "#aabbcc",
+        shapes: [
+          Array.from({ length: nRings }, () => new Float32Array(floatsPerRing)),
+        ],
+      },
+    ];
+  }
+
+  it("frameBytes sums byteLength across all rings", () => {
+    // 3 rings of 4 floats each -> 3 * 4 * 4 = 48 bytes
+    expect(frameBytes(makeAreas(3, 4))).toBe(48);
+  });
+
+  it("frameBytes returns 0 for non-array values (backwards-compat with integer test fixtures)", () => {
+    expect(frameBytes(42)).toBe(0);
+    expect(frameBytes(null)).toBe(0);
+    expect(frameBytes(undefined)).toBe(0);
+  });
+
+  it("_cacheBytes tracks total bytes and decrements on eviction", () => {
+    const card = new MeteoSwissRadarCard();
+    // Each entry: 1 ring of 256 floats = 1024 bytes.
+    const entry = () => makeAreas(1, 256);
+    card._cachePut("a", entry());
+    card._cachePut("b", entry());
+    expect(card._cacheBytes).toBe(2048);
+
+    // Inserting a third entry stays under the byte budget but entry count is fine.
+    card._cachePut("c", entry());
+    expect(card._cache.size).toBe(3);
+    expect(card._cacheBytes).toBe(3072);
+  });
+
+  it("evicts LRU entries when byte budget is exceeded", () => {
+    const card = new MeteoSwissRadarCard();
+
+    // Build entries that each consume DECODE_CACHE_BYTES / 4 bytes.
+    // With 5 such entries, the cache should hold at most 4 (budget limit),
+    // evicting the oldest on each insertion after the 4th.
+    const quarterBudget = DECODE_CACHE_BYTES / 4; // bytes per entry
+    // Float32Array has 4 bytes/element; floats needed:
+    const floats = quarterBudget / 4;
+    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+
+    card._cachePut("u0", entry());
+    card._cachePut("u1", entry());
+    card._cachePut("u2", entry());
+    card._cachePut("u3", entry()); // now at budget exactly (4 * quarter = 1 * budget)
+    expect(card._cacheBytes).toBe(DECODE_CACHE_BYTES);
+    expect(card._cache.size).toBe(4);
+
+    // Adding a 5th entry must evict the oldest (u0) to stay under budget.
+    card._cachePut("u4", entry());
+    expect(card._cache.size).toBe(4);
+    expect(card._cacheBytes).toBe(DECODE_CACHE_BYTES);
+    expect(card._cacheGet("u0")).toBeUndefined(); // evicted
+    expect(card._cacheGet("u4")).toBeDefined(); // kept
+  });
+
+  it("light manifest (all measurement frames) stays fully cached without eviction", () => {
+    const card = new MeteoSwissRadarCard();
+    card._cacheMax = 100;
+
+    // Measurement frames in the issue are 0.08 MB total for 73 frames,
+    // so ~1.1 KB each. Simulate 80 light frames at 1 KB each.
+    const floats = 1024 / 4; // 256 floats = 1024 bytes
+    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+
+    for (let i = 0; i < 80; i++) card._cachePut(`frame-${i}`, entry());
+
+    // 80 * 1 KB = 80 KB, far under the 24 MB budget -> no eviction.
+    expect(card._cache.size).toBe(80);
+    expect(card._cacheBytes).toBe(80 * 1024);
+    expect(card._cacheGet("frame-0")).toBeDefined();
+  });
+
+  it("heavy synthetic manifest stays under byte budget despite large frame count", () => {
+    const card = new MeteoSwissRadarCard();
+
+    // 300 frames each at 200 KB = 60 MB total, well over the 24 MB budget.
+    // The cache must clamp to DECODE_CACHE_BYTES.
+    const bytesPerEntry = 200 * 1024;
+    const floats = bytesPerEntry / 4;
+    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+
+    for (let i = 0; i < 300; i++) card._cachePut(`frame-${i}`, entry());
+
+    expect(card._cacheBytes).toBeLessThanOrEqual(DECODE_CACHE_BYTES);
+    // Should have some entries (the most recent ones).
+    expect(card._cache.size).toBeGreaterThan(0);
+    // The oldest entries must have been evicted.
+    expect(card._cacheGet("frame-0")).toBeUndefined();
+  });
+
+  it("_teardown resets _cacheBytes and _cacheSizes", () => {
+    const card = new MeteoSwissRadarCard();
+    const entry = () => makeAreas(1, 256);
+    card._cachePut("x", entry());
+    expect(card._cacheBytes).toBeGreaterThan(0);
+
+    card._initialized = true;
+    card._map = { remove() {} };
+    card._teardown();
+
+    expect(card._cacheBytes).toBe(0);
+    expect(card._cacheSizes.size).toBe(0);
+  });
+
+  it("overwriting a cached URL keeps _cacheBytes accurate", () => {
+    const card = new MeteoSwissRadarCard();
+    // First write: 2 rings of 4 floats = 32 bytes.
+    card._cachePut("url", makeAreas(2, 4));
+    expect(card._cacheBytes).toBe(32);
+    // Overwrite with a different size: 1 ring of 8 floats = 32 bytes.
+    card._cachePut("url", makeAreas(1, 8));
+    expect(card._cache.size).toBe(1);
+    expect(card._cacheBytes).toBe(32);
   });
 });

@@ -12,7 +12,10 @@ const TILE_URL =
   "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg";
 const ATTRIBUTION = "Source: MeteoSwiss &middot; &copy; swisstopo";
 
-const CACHE_SIZE = 130; // decoded frames kept in memory (LRU)
+// Byte budget for the decoded-frame cache. The heaviest single frame is ~518 KB
+// decoded; a 291-frame live manifest is ~26 MB total, so 24 MB keeps ~270 frames
+// resident and lets only the heaviest forecast tail rotate under eviction.
+const DECODE_CACHE_BYTES = 24 * 1024 * 1024;
 // Two window-mode loops (~24 frames each): cheap to rebuild (0.73 ms/frame),
 // and _reset() clears it on every pan/zoom anyway, so a large pool buys nothing.
 const PATH_CACHE_SIZE = 48; // projected Path2D sets per view (LRU), fixed cap
@@ -110,6 +113,18 @@ function decodeFrame(frame) {
       shape.map((ct) => decodeContour(ct, grid))
     ),
   }));
+}
+
+/* Sum Float32Array bytes across all rings in a decoded frame result. */
+function frameBytes(areas) {
+  if (!Array.isArray(areas)) return 0;
+  let b = 0;
+  for (const area of areas)
+    if (area && Array.isArray(area.shapes))
+      for (const shape of area.shapes)
+        for (const ring of shape)
+          if (ring && ring.byteLength) b += ring.byteLength;
+  return b;
 }
 
 // One formatter instance reused across all calls avoids re-parsing the locale
@@ -226,7 +241,9 @@ class MeteoSwissRadarCard extends HTMLElement {
   constructor() {
     super();
     this._cache = new Map(); // radar_url -> decoded areas
-    this._cacheMax = CACHE_SIZE; // raised to frames.length + margin after first manifest
+    this._cacheSizes = new Map(); // radar_url -> byte size of that entry
+    this._cacheBytes = 0; // running total decoded bytes
+    this._cacheMax = Infinity; // entry-count ceiling; set to frames.length + 10 after manifest
     this._pending = new Map(); // radar_url -> Promise
     this._retryAfter = new Map(); // radar_url -> earliest retry timestamp (ms)
     this._frames = [];
@@ -367,6 +384,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     }
     this._radar = null;
     this._cache.clear();
+    this._cacheSizes.clear();
+    this._cacheBytes = 0;
     this._pending.clear();
     this._retryAfter.clear();
     this._frames = [];
@@ -735,9 +754,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       : null;
     this._animVersion = version;
     this._frames = frames;
-    // Grow the decode cache to hold all manifest frames so full-mode playback
-    // completes a second loop pass without any refetch/redecode.
-    // Path2D cache is deliberately NOT grown here: it stays at PATH_CACHE_SIZE
+    // Cap entry count at manifest size + margin; the byte budget (DECODE_CACHE_BYTES)
+    // is the primary limit, but the entry count prevents growth on abnormally large
+    // manifests. Path2D cache is deliberately NOT grown: it stays at PATH_CACHE_SIZE
     // because _reset() clears it on every pan/zoom and rebuild is ~0.73 ms.
     this._cacheMax = frames.length + 10;
     const measCount = frames.filter((f) => f.type === "measurement").length;
@@ -952,9 +971,25 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   _cachePut(url, v) {
+    // Remove and re-account an existing entry being overwritten.
+    if (this._cache.has(url)) {
+      this._cacheBytes -= this._cacheSizes.get(url) || 0;
+      this._cacheSizes.delete(url);
+      this._cache.delete(url);
+    }
+    const bytes = frameBytes(v);
     this._cache.set(url, v);
-    while (this._cache.size > this._cacheMax) {
-      this._cache.delete(this._cache.keys().next().value);
+    this._cacheSizes.set(url, bytes);
+    this._cacheBytes += bytes;
+    // Evict LRU while either limit (byte budget or entry count) is exceeded.
+    while (
+      this._cache.size > this._cacheMax ||
+      this._cacheBytes > DECODE_CACHE_BYTES
+    ) {
+      const oldest = this._cache.keys().next().value;
+      this._cacheBytes -= this._cacheSizes.get(oldest) || 0;
+      this._cacheSizes.delete(oldest);
+      this._cache.delete(oldest);
     }
   }
 
@@ -1000,7 +1035,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   // Keep _retryAfter from growing without bound over a long-running card:
   // frames roll off the manifest, so drop entries whose backoff has expired.
   _pruneRetryAfter() {
-    if (this._retryAfter.size <= CACHE_SIZE) return;
+    if (this._retryAfter.size <= 128) return;
     const now = Date.now();
     for (const [u, t] of this._retryAfter) {
       if (t <= now) this._retryAfter.delete(u);
