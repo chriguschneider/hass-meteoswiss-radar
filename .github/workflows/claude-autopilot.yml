@@ -10,6 +10,10 @@ name: "Claude (autopilot: grind the P-backlog)"
 # To pause: disable this workflow in the Actions tab.
 
 on:
+  # A merged agent PR advances instantly (works for human merges; bot
+  # auto-merges are caught by the timer below thanks to GitHub's loop guard).
+  pull_request:
+    types: [closed]
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -20,6 +24,12 @@ concurrency:
 
 jobs:
   advance:
+    # For merges: only advance after a merged agent PR. Otherwise (schedule /
+    # manual) always run. The open-PR gate below prevents double-starts.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'claude/'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
