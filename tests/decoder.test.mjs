@@ -794,6 +794,63 @@ describe("dynamic cache sizing (issue #14)", () => {
   });
 });
 
+describe("Path2D cache cap (issue #51)", () => {
+  // Build a minimal _refreshManifest-compatible card and run it with a large
+  // manifest to confirm _pathCacheMax stays at the fixed constant, not at
+  // frames.length.  The decode cache (_cacheMax) must still grow — only the
+  // path cache is capped.
+  async function runRefreshManifest(nFrames) {
+    const card = new MeteoSwissRadarCard();
+    const pics = Array.from({ length: nFrames }, (_, i) => ({
+      radar_url: `frame-${i}`,
+      data_type: "measurement",
+      day: "23.08.2026",
+      timepoint: "00:00",
+      timestamp: i * 300,
+    }));
+    card._config = {};
+    card._api = (path) => {
+      if (path.includes("versions.json"))
+        return Promise.resolve({ "precipitation/animation": "v1" });
+      return Promise.resolve({ map_images: [{ pictures: pics }], legend: [] });
+    };
+    card._tMeas = { style: {} };
+    card._tFc = { style: {} };
+    card._tNow = { style: {}, hidden: false };
+    card._modeHint = { hidden: false };
+    card._renderLegend = () => {};
+    card._buildTimelineLabels = () => {};
+    card._computeWindow = () => {};
+    card._maybeResumeAfterFailure = () => {};
+    await card._refreshManifest(true);
+    return card;
+  }
+
+  it("_pathCacheMax stays at the fixed constant regardless of manifest size", async () => {
+    // A 291-frame manifest (the live size measured in the issue) must not
+    // inflate _pathCacheMax beyond the compile-time cap.
+    const card = await runRefreshManifest(291);
+    // The decode cache grows to accommodate all frames.
+    expect(card._cacheMax).toBe(291 + 10);
+    // The path cache stays at its fixed cap — never tied to frames.length.
+    // 48 is PATH_CACHE_SIZE (two window-mode loops, fixed at compile time).
+    expect(card._pathCacheMax).toBeUndefined(); // lives on the RadarLayer, not the card
+  });
+
+  it("RadarLayer._pathCacheMax is fixed at 48 and is not overwritten by _refreshManifest", async () => {
+    const card = await runRefreshManifest(291);
+    // Simulate a RadarLayer being attached: its _pathCacheMax starts at the
+    // constant (set in initialize()) and must not be touched by _refreshManifest.
+    const fakeLayer = { _pathCacheMax: 48 };
+    card._radar = fakeLayer;
+    // Stub DOM-heavy methods that would fire on a second refresh with frames present.
+    card._jumpTo = () => {};
+    // Run again to confirm a second manifest refresh does not change it.
+    await card._refreshManifest(true);
+    expect(fakeLayer._pathCacheMax).toBe(48);
+  });
+});
+
 describe("hot-path optimisations (issue #15)", () => {
   // Shared frame list with enough entries to build a window.
   function makeFrames(n) {

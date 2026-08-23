@@ -13,7 +13,9 @@ const TILE_URL =
 const ATTRIBUTION = "Source: MeteoSwiss &middot; &copy; swisstopo";
 
 const CACHE_SIZE = 130; // decoded frames kept in memory (LRU)
-const PATH_CACHE_SIZE = 130; // projected Path2D sets per view (LRU)
+// Two window-mode loops (~24 frames each): cheap to rebuild (0.73 ms/frame),
+// and _reset() clears it on every pan/zoom anyway, so a large pool buys nothing.
+const PATH_CACHE_SIZE = 48; // projected Path2D sets per view (LRU), fixed cap
 const PREFETCH_AHEAD = 6; // frames fetched ahead of the playhead
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
 const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
@@ -733,11 +735,11 @@ class MeteoSwissRadarCard extends HTMLElement {
       : null;
     this._animVersion = version;
     this._frames = frames;
-    // Grow the caches to hold all manifest frames so full-mode playback
+    // Grow the decode cache to hold all manifest frames so full-mode playback
     // completes a second loop pass without any refetch/redecode.
-    const newCacheMax = frames.length + 10;
-    this._cacheMax = newCacheMax;
-    if (this._radar) this._radar._pathCacheMax = newCacheMax;
+    // Path2D cache is deliberately NOT grown here: it stays at PATH_CACHE_SIZE
+    // because _reset() clears it on every pan/zoom and rebuild is ~0.73 ms.
+    this._cacheMax = frames.length + 10;
     const measCount = frames.filter((f) => f.type === "measurement").length;
     // Positions map TIME, not frame index: the cadence is mixed (5-min
     // measurement, 5/10-min forecast), so index fractions drift off the axis.
