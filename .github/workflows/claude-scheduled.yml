@@ -22,6 +22,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      id-token: write # claude-code-action needs OIDC for its GitHub App token
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,3 +81,11 @@ jobs:
             - Respect the dependency order in the tracking issue (#20): if this
               issue depends on something not yet merged, say so in the PR and keep
               the change minimal.
+
+      # If the Claude step failed, release the claim so the issue is retried
+      # next run instead of being stuck "in progress" forever.
+      - name: Release claim on failure
+        if: failure() && steps.next.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ steps.next.outputs.number }}" --remove-label "agent:in-progress" || true
