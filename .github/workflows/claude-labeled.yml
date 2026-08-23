@@ -1,0 +1,81 @@
+name: Claude (opt-in via label)
+
+# Opt-in automation: an issue is worked ONLY when it carries the `agent:go`
+# label. Ideas without the label are never touched. Draft PRs only, never
+# the default branch. Requires the CLAUDE_CODE_OAUTH_TOKEN secret.
+# See docs/agent-automation.md.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue number to work on"
+        required: true
+
+jobs:
+  work-issue:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'agent:go')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write # claude-code-action needs OIDC for its GitHub App token
+    concurrency:
+      group: claude-issue-${{ github.event.issue.number || github.event.inputs.issue }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick model
+        id: model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n="${{ github.event.issue.number || github.event.inputs.issue }}"
+          bash .github/scripts/pick-model.sh "$n" >> "$GITHUB_OUTPUT"
+
+      - name: Implement and open a draft PR
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Headless worker: allow git / gh / build tools. Safe: isolated
+          # runner, draft PRs only, human merges.
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40 --dangerously-skip-permissions"
+          prompt: |
+            You are working, unattended, on GitHub issue
+            #${{ github.event.issue.number || github.event.inputs.issue }}
+            of this repository. FIRST read whichever of AGENTS.md, CLAUDE.md,
+            CONTRIBUTING.md, README.md and docs/ exist, and follow the repo's
+            own conventions and quality gates.
+
+            Rules (non-negotiable):
+            - Work on a branch `claude/<issue>-<short-slug>`. NEVER push to the
+              default branch.
+            - Discover and run the repo's own checks (e.g. `npm ci` + `npm test`
+              / `npm run build`, `pytest`, `ruff`/`flake8`, or whatever the repo
+              defines) and make them pass before opening the PR. If there are
+              none, say so in the PR.
+            - You CANNOT modify files under `.github/workflows/` (the token lacks
+              the `workflows` permission — a deliberate safety boundary). If the
+              fix needs a workflow change, describe the exact change in the PR
+              and stop.
+            - Open a **draft** PR with `gh pr create --draft` against the default
+              branch, linking the issue
+              (`Closes #${{ github.event.issue.number || github.event.inputs.issue }}`),
+              summarising the change and how you verified it.
+            - If the issue is ambiguous or you cannot verify the fix, DO NOT
+              guess: open the draft PR with partial work and a clear
+              "Blocked / needs decision" section, and stop.
+
+      - name: Release the label on failure
+        if: failure() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue edit "${{ github.event.issue.number }}" --remove-label "agent:go" || true
