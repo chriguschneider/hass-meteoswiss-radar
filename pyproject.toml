@@ -14,3 +14,7 @@ select = ["E", "F", "W", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# CI runs the `pytest` console script (not `python -m pytest`), which does
+# not put the repo root on sys.path. test_proxy.py imports the integration
+# package, so add the root explicitly.
+pythonpath = ["."]
