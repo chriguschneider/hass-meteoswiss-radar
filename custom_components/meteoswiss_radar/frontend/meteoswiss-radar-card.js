@@ -256,6 +256,10 @@ class MeteoSwissRadarCard extends HTMLElement {
     // Play mode remembered when a fail-streak paused playback, so recovery can
     // restart the same loop. null unless a network outage paused us.
     this._pausedByFailure = null;
+    // Play mode active just before disconnectedCallback so connectedCallback
+    // can resume it when the teardown debounce is cancelled (re-attach within
+    // the grace window). null when the card was manually paused at disconnect.
+    this._playModeBeforeDetach = null;
   }
 
   setConfig(config) {
@@ -343,6 +347,12 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (this._teardownTimer) {
       clearTimeout(this._teardownTimer);
       this._teardownTimer = null;
+      // Restore the play mode that was running before the detach. Manual pause
+      // leaves _playModeBeforeDetach null, so it stays paused.
+      if (this._playModeBeforeDetach) {
+        this._startPlay(this._playModeBeforeDetach);
+        this._playModeBeforeDetach = null;
+      }
     }
     this._maybeInit(); // rebuilds from scratch if a teardown already fired
     if (this._map) requestAnimationFrame(() => this._map.invalidateSize());
@@ -350,6 +360,10 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    // Remember the running mode so connectedCallback can restart it if the
+    // debounce fires quickly (tab switch / cached layout re-attach). Only set
+    // when actively playing; a manual pause keeps the field null.
+    this._playModeBeforeDetach = this._playing ? this._playMode : null;
     this._pause();
     this._stopRecoveryTimer();
     if (this._refreshTimer) {
@@ -393,6 +407,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._initialized = false;
     this._dataReady = false;
     this._autoplayStarted = false;
+    this._playModeBeforeDetach = null;
   }
 
   getCardSize() {
