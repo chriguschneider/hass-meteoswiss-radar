@@ -61,7 +61,7 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
@@ -112,24 +112,29 @@ describe("decodeFrame", () => {
     ],
   };
 
-  it("preserves area/shape/ring structure and prefixes the fill color", () => {
+  it("preserves area structure and prefixes the fill color", () => {
     const decoded = decodeFrame(frame);
     expect(decoded).toHaveLength(1);
     expect(decoded[0].color).toBe("#9e849a");
-    expect(decoded[0].shapes).toHaveLength(1);
-    expect(decoded[0].shapes[0]).toHaveLength(1);
+    // Single-buffer layout: verts holds all vertices, rings holds start offsets.
+    expect(Object.prototype.toString.call(decoded[0].verts)).toBe("[object Float32Array]");
+    expect(Object.prototype.toString.call(decoded[0].rings)).toBe("[object Int32Array]");
   });
 
-  it("emits a Float32Array with 2 floats per vertex, each inside the Swiss bbox", () => {
-    const ring = decodeFrame(frame)[0].shapes[0][0];
-    expect(Object.prototype.toString.call(ring)).toBe("[object Float32Array]");
-    expect(ring.length).toBe(4); // 2 vertices * 2 (lat, lng)
-    for (let i = 0; i < ring.length; i += 2) {
-      expect(ring[i]).toBeGreaterThan(45);     // lat
-      expect(ring[i]).toBeLessThan(48);
-      expect(ring[i + 1]).toBeGreaterThan(5);  // lng
-      expect(ring[i + 1]).toBeLessThan(11);
+  it("emits verts with 2 floats per vertex inside the Swiss bbox, rings with sentinel", () => {
+    const { verts, rings } = decodeFrame(frame)[0];
+    // 2 vertices * 2 floats = 4 elements in verts.
+    expect(verts.length).toBe(4);
+    for (let i = 0; i < verts.length; i += 2) {
+      expect(verts[i]).toBeGreaterThan(45);     // lat
+      expect(verts[i]).toBeLessThan(48);
+      expect(verts[i + 1]).toBeGreaterThan(5);  // lng
+      expect(verts[i + 1]).toBeLessThan(11);
     }
+    // rings: [0, 4] — one ring starting at 0, sentinel at verts.length.
+    expect(rings.length).toBe(2);
+    expect(rings[0]).toBe(0);
+    expect(rings[1]).toBe(4);
   });
 
   it("matches the golden geometry (locks decoder + projection)", () => {
@@ -719,7 +724,7 @@ describe("Leaflet retry on transient failure (issue #6)", () => {
   });
 });
 
-describe("typed-array geometry storage (issue #14)", () => {
+describe("typed-array geometry storage (issue #14, #53)", () => {
   const frame = {
     coords: GRID,
     areas: [
@@ -730,25 +735,34 @@ describe("typed-array geometry storage (issue #14)", () => {
     ],
   };
 
-  it("ring is a typed array with 4 bytes per element (Float32Array)", () => {
-    const ring = decodeFrame(frame)[0].shapes[0][0];
-    // Float32Array has BYTES_PER_ELEMENT=4; a plain Array has none.
-    // Cross-vm-realm instanceof is unreliable, so check the TypedArray tag.
-    expect(Object.prototype.toString.call(ring)).toBe("[object Float32Array]");
-    expect(ring.BYTES_PER_ELEMENT).toBe(4);
+  it("verts is Float32Array with BYTES_PER_ELEMENT=4", () => {
+    const { verts } = decodeFrame(frame)[0];
+    expect(Object.prototype.toString.call(verts)).toBe("[object Float32Array]");
+    expect(verts.BYTES_PER_ELEMENT).toBe(4);
   });
 
-  it("length is vertices*2 (interleaved lat/lng)", () => {
-    const ring = decodeFrame(frame)[0].shapes[0][0];
+  it("rings is Int32Array with BYTES_PER_ELEMENT=4", () => {
+    const { rings } = decodeFrame(frame)[0];
+    expect(Object.prototype.toString.call(rings)).toBe("[object Int32Array]");
+    expect(rings.BYTES_PER_ELEMENT).toBe(4);
+  });
+
+  it("verts length is totalVertices*2 (interleaved lat/lng)", () => {
+    const { verts } = decodeFrame(frame)[0];
     // 2 chars in o -> 2 vertices -> 4 floats
-    expect(ring.length).toBe(4);
+    expect(verts.length).toBe(4);
   });
 
-  it("preserves area/shape/ring count independent of storage format", () => {
+  it("rings has numRings+1 entries (sentinel at end = verts.length)", () => {
+    const { verts, rings } = decodeFrame(frame)[0];
+    // 1 contour -> 1 ring -> rings = [0, verts.length]
+    expect(rings.length).toBe(2);
+    expect(rings[rings.length - 1]).toBe(verts.length);
+  });
+
+  it("area count is preserved", () => {
     const decoded = decodeFrame(frame);
     expect(decoded).toHaveLength(1);
-    expect(decoded[0].shapes).toHaveLength(1);
-    expect(decoded[0].shapes[0]).toHaveLength(1);
   });
 });
 
@@ -1162,22 +1176,21 @@ describe("setConfig zoom and center validation (issue #8)", () => {
 });
 
 describe("byte-bounded decode cache (issue #52)", () => {
-  // Build a decoded areas value whose rings contribute a known number of bytes.
-  // Each Float32Array element is 4 bytes; length 4 = 2 vertices * 2 floats = 16 bytes.
+  // Build a decoded areas value with nRings rings of floatsPerRing floats each,
+  // using the single-buffer layout (verts + rings).
+  // frameBytes = verts.byteLength + rings.byteLength
+  //            = (nRings * floatsPerRing * 4) + ((nRings + 1) * 4)
   function makeAreas(nRings, floatsPerRing) {
-    return [
-      {
-        color: "#aabbcc",
-        shapes: [
-          Array.from({ length: nRings }, () => new Float32Array(floatsPerRing)),
-        ],
-      },
-    ];
+    const totalFloats = nRings * floatsPerRing;
+    const verts = new Float32Array(totalFloats);
+    const rings = new Int32Array(nRings + 1);
+    for (let r = 0; r <= nRings; r++) rings[r] = r * floatsPerRing;
+    return [{ color: "#aabbcc", verts, rings }];
   }
 
-  it("frameBytes sums byteLength across all rings", () => {
-    // 3 rings of 4 floats each -> 3 * 4 * 4 = 48 bytes
-    expect(frameBytes(makeAreas(3, 4))).toBe(48);
+  it("frameBytes sums verts.byteLength and rings.byteLength for each area", () => {
+    // 3 rings of 4 floats -> verts: 3*4*4=48 B, rings: (3+1)*4=16 B -> total 64 B
+    expect(frameBytes(makeAreas(3, 4))).toBe(48 + 16);
   });
 
   it("frameBytes returns 0 for non-array values (backwards-compat with integer test fixtures)", () => {
@@ -1188,28 +1201,39 @@ describe("byte-bounded decode cache (issue #52)", () => {
 
   it("_cacheBytes tracks total bytes and decrements on eviction", () => {
     const card = new MeteoSwissRadarCard();
-    // Each entry: 1 ring of 256 floats = 1024 bytes.
+    // Each entry: 1 ring of 256 floats.
+    // frameBytes = 256*4 + 2*4 = 1024 + 8 = 1032 bytes.
     const entry = () => makeAreas(1, 256);
+    const entryBytes = frameBytes(entry());
     card._cachePut("a", entry());
     card._cachePut("b", entry());
-    expect(card._cacheBytes).toBe(2048);
+    expect(card._cacheBytes).toBe(entryBytes * 2);
 
     // Inserting a third entry stays under the byte budget but entry count is fine.
     card._cachePut("c", entry());
     expect(card._cache.size).toBe(3);
-    expect(card._cacheBytes).toBe(3072);
+    expect(card._cacheBytes).toBe(entryBytes * 3);
   });
 
   it("evicts LRU entries when byte budget is exceeded", () => {
     const card = new MeteoSwissRadarCard();
 
-    // Build entries that each consume DECODE_CACHE_BYTES / 4 bytes.
-    // With 5 such entries, the cache should hold at most 4 (budget limit),
-    // evicting the oldest on each insertion after the 4th.
-    const quarterBudget = DECODE_CACHE_BYTES / 4; // bytes per entry
-    // Float32Array has 4 bytes/element; floats needed:
-    const floats = quarterBudget / 4;
-    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+    // Build entries that together exceed DECODE_CACHE_BYTES.
+    // Use entries of exactly DECODE_CACHE_BYTES / 4 bytes each.
+    // Each entry's verts byte size is quarterBudget - rings overhead.
+    // Simpler: just use raw objects and set exact byte sizes via the formula.
+    const quarterBudget = DECODE_CACHE_BYTES / 4; // target bytes per entry
+    // We want frameBytes(entry) === quarterBudget.
+    // frameBytes = verts.byteLength + rings.byteLength
+    //            = floats*4 + (1+1)*4  (1 ring, sentinel)
+    // => floats*4 = quarterBudget - 8  => floats = (quarterBudget - 8) / 4
+    const floats = (quarterBudget - 8) / 4;
+    const entry = () => {
+      const verts = new Float32Array(floats);
+      const rings = new Int32Array(2);  // [0, verts.length]
+      rings[1] = verts.length;
+      return [{ color: "#aabbcc", verts, rings }];
+    };
 
     card._cachePut("u0", entry());
     card._cachePut("u1", entry());
@@ -1230,27 +1254,35 @@ describe("byte-bounded decode cache (issue #52)", () => {
     const card = new MeteoSwissRadarCard();
     card._cacheMax = 100;
 
-    // Measurement frames in the issue are 0.08 MB total for 73 frames,
-    // so ~1.1 KB each. Simulate 80 light frames at 1 KB each.
-    const floats = 1024 / 4; // 256 floats = 1024 bytes
-    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+    // Simulate 80 light frames at ~1 KB each.
+    const floats = 256; // 256 floats = 1024 bytes of verts
+    const entry = () => {
+      const verts = new Float32Array(floats);
+      const rings = new Int32Array(2);
+      rings[1] = verts.length;
+      return [{ color: "#aabbcc", verts, rings }];
+    };
+    const entryBytes = frameBytes(entry());
 
     for (let i = 0; i < 80; i++) card._cachePut(`frame-${i}`, entry());
 
-    // 80 * 1 KB = 80 KB, far under the 24 MB budget -> no eviction.
+    // 80 * entryBytes << 24 MB -> no eviction.
     expect(card._cache.size).toBe(80);
-    expect(card._cacheBytes).toBe(80 * 1024);
+    expect(card._cacheBytes).toBe(80 * entryBytes);
     expect(card._cacheGet("frame-0")).toBeDefined();
   });
 
   it("heavy synthetic manifest stays under byte budget despite large frame count", () => {
     const card = new MeteoSwissRadarCard();
 
-    // 300 frames each at 200 KB = 60 MB total, well over the 24 MB budget.
-    // The cache must clamp to DECODE_CACHE_BYTES.
-    const bytesPerEntry = 200 * 1024;
-    const floats = bytesPerEntry / 4;
-    const entry = () => [{ color: "#aabbcc", shapes: [[new Float32Array(floats)]] }];
+    // 300 frames each at ~200 KB = 60 MB total, well over the 24 MB budget.
+    const floats = (200 * 1024 - 8) / 4; // ~200 KB per entry
+    const entry = () => {
+      const verts = new Float32Array(floats);
+      const rings = new Int32Array(2);
+      rings[1] = verts.length;
+      return [{ color: "#aabbcc", verts, rings }];
+    };
 
     for (let i = 0; i < 300; i++) card._cachePut(`frame-${i}`, entry());
 
@@ -1277,13 +1309,17 @@ describe("byte-bounded decode cache (issue #52)", () => {
 
   it("overwriting a cached URL keeps _cacheBytes accurate", () => {
     const card = new MeteoSwissRadarCard();
-    // First write: 2 rings of 4 floats = 32 bytes.
-    card._cachePut("url", makeAreas(2, 4));
-    expect(card._cacheBytes).toBe(32);
-    // Overwrite with a different size: 1 ring of 8 floats = 32 bytes.
-    card._cachePut("url", makeAreas(1, 8));
+    // First write: 2 rings of 4 floats.
+    const first = makeAreas(2, 4);
+    const firstBytes = frameBytes(first);
+    card._cachePut("url", first);
+    expect(card._cacheBytes).toBe(firstBytes);
+    // Overwrite with a different geometry; size may differ.
+    const second = makeAreas(1, 8);
+    const secondBytes = frameBytes(second);
+    card._cachePut("url", second);
     expect(card._cache.size).toBe(1);
-    expect(card._cacheBytes).toBe(32);
+    expect(card._cacheBytes).toBe(secondBytes);
   });
 });
 
@@ -1314,13 +1350,16 @@ describe("decodeFrame fixture vs. Python reference (issue #16)", () => {
     }
   });
 
-  it("produces the same shape/ring structure as the Python reference", () => {
+  it("total ring count per area matches the Python reference", () => {
+    // The JS decoder flattens shapes into a single ring sequence (rings array).
+    // The Python reference still has the nested shapes[][rings] structure.
+    // Count total rings from the Python side and compare against rings.length-1.
     const decoded = decodeFrame(fixture);
     for (let a = 0; a < reference.length; a++) {
-      expect(decoded[a].shapes).toHaveLength(reference[a].shapes.length);
-      for (let s = 0; s < reference[a].shapes.length; s++) {
-        expect(decoded[a].shapes[s]).toHaveLength(reference[a].shapes[s].length);
-      }
+      let pyRingCount = 0;
+      for (const shape of reference[a].shapes) pyRingCount += shape.length;
+      const jsRingCount = decoded[a].rings.length - 1; // sentinel excluded
+      expect(jsRingCount).toBe(pyRingCount);
     }
   });
 
@@ -1328,18 +1367,21 @@ describe("decodeFrame fixture vs. Python reference (issue #16)", () => {
     // Both the JS Float32Array and the Python to_float32() use IEEE 754 single
     // precision; values must match exactly.  Any difference indicates a formula
     // divergence, not just a rounding artefact.
+    // The JS decoder flattens shapes into one verts buffer; iterate py rings in
+    // order and compare against sequential windows of the flat JS buffer.
     const decoded = decodeFrame(fixture);
     for (let a = 0; a < reference.length; a++) {
-      for (let s = 0; s < reference[a].shapes.length; s++) {
-        for (let r = 0; r < reference[a].shapes[s].length; r++) {
-          const jsRing = decoded[a].shapes[s][r];
-          const pyRing = reference[a].shapes[s][r];
-          expect(jsRing.length).toBe(pyRing.length);
+      const { verts } = decoded[a];
+      let floatOffset = 0;
+      for (const shape of reference[a].shapes) {
+        for (const pyRing of shape) {
+          expect(pyRing.length).toBeGreaterThan(0);
           for (let k = 0; k < pyRing.length; k++) {
             // Tolerance covers the maximum error introduced by Float32 rounding
             // of a WGS84 coordinate in the Swiss domain (~1e-5 relative).
-            expect(jsRing[k]).toBeCloseTo(pyRing[k], 4);
+            expect(verts[floatOffset + k]).toBeCloseTo(pyRing[k], 4);
           }
+          floatOffset += pyRing.length;
         }
       }
     }
@@ -1348,15 +1390,12 @@ describe("decodeFrame fixture vs. Python reference (issue #16)", () => {
   it("all decoded coordinates fall inside the Swiss WGS84 bbox", () => {
     const decoded = decodeFrame(fixture);
     for (const area of decoded) {
-      for (const shape of area.shapes) {
-        for (const ring of shape) {
-          for (let k = 0; k < ring.length; k += 2) {
-            expect(ring[k]).toBeGreaterThan(45);   // lat
-            expect(ring[k]).toBeLessThan(48);
-            expect(ring[k + 1]).toBeGreaterThan(5); // lng
-            expect(ring[k + 1]).toBeLessThan(11);
-          }
-        }
+      const { verts } = area;
+      for (let k = 0; k < verts.length; k += 2) {
+        expect(verts[k]).toBeGreaterThan(45);   // lat
+        expect(verts[k]).toBeLessThan(48);
+        expect(verts[k + 1]).toBeGreaterThan(5); // lng
+        expect(verts[k + 1]).toBeLessThan(11);
       }
     }
   });

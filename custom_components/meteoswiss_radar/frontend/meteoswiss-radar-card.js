@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.7.6";
+const CARD_VERSION = "0.7.7";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -15,6 +15,9 @@ const ATTRIBUTION = "Source: MeteoSwiss &middot; &copy; swisstopo";
 // Byte budget for the decoded-frame cache. The heaviest single frame is ~518 KB
 // decoded; a 291-frame live manifest is ~26 MB total, so 24 MB keeps ~270 frames
 // resident and lets only the heaviest forecast tail rotate under eviction.
+// With the single-buffer layout (issue #53) frameBytes now accounts for the real
+// footprint; the Int32 ring-index overhead is negligible (~300 KB for 74 k rings).
+// Keeping at 24 MB: same frame count as before, true browser memory drops ~32 %.
 const DECODE_CACHE_BYTES = 24 * 1024 * 1024;
 // Two window-mode loops (~24 frames each): cheap to rebuild (0.73 ms/frame),
 // and _reset() clears it on every pan/zoom anyway, so a large pool buys nothing.
@@ -64,16 +67,17 @@ function gridKmToLatLng(xKm, yKm) {
 }
 
 /* Chain-code contour decoder (see FORMAT.md).
+ * Writes n vertices (lat/lng interleaved) into verts starting at offset and
+ * returns the next free offset. Caller pre-allocates verts to the right size.
  * A vertex sits on a gridline crossing: i even = on a vertical gridline
  * (fractional offset applies to y), i odd = on a horizontal one. Deltas in d
  * apply BETWEEN vertices: o.length vertices, o.length - 1 char pairs in d. */
-function decodeContour(contour, grid) {
+function decodeContourInto(contour, grid, verts, offset) {
   let i = contour.i;
   let j = contour.j;
   const d = contour.d;
   const o = contour.o;
   const n = o.length;
-  const points = new Float32Array(n * 2); // lat/lng interleaved
   for (let s = 0; s < n; s++) {
     const off = (o.charCodeAt(s) - 48) / 10 + 0.05;
     let x, y;
@@ -85,18 +89,22 @@ function decodeContour(contour, grid) {
       y = grid.yMin + (grid.ySpan * (j / 2)) / grid.yCount;
     }
     const ll = gridKmToLatLng(x, y);
-    points[s * 2] = ll[0];
-    points[s * 2 + 1] = ll[1];
+    verts[offset + s * 2] = ll[0];
+    verts[offset + s * 2 + 1] = ll[1];
     if (s < n - 1) {
       i += d.charCodeAt(2 * s) - 77;
       j += d.charCodeAt(2 * s + 1) - 77;
     }
   }
-  return points;
+  return offset + n * 2;
 }
 
-/* Decode a frame into view-independent geometry: one entry per intensity
- * band, each shape an array of rings (ring 0 outer, later rings holes). */
+/* Decode a frame into view-independent geometry: one entry per intensity band.
+ * Each area carries a single Float32Array of lat/lng pairs (all rings, all
+ * shapes concatenated) and an Int32Array of ring start indices with a sentinel
+ * at the end — ring r spans verts[rings[r]..rings[r+1]).  Shapes within an
+ * area are flattened: rendering uses evenodd fill, so the ring sequence (outer,
+ * holes, next-shape outer, …) produces correct output regardless of grouping. */
 function decodeFrame(frame) {
   const c = frame.coords;
   const grid = {
@@ -107,23 +115,43 @@ function decodeFrame(frame) {
     ySpan: c.y_max - c.y_min,
     yCount: c.y_count,
   };
-  return frame.areas.map((area) => ({
-    color: `#${area.color}`,
-    shapes: area.shapes.map((shape) =>
-      shape.map((ct) => decodeContour(ct, grid))
-    ),
-  }));
+  return frame.areas.map((area) => {
+    // Count totals upfront so the Float32Array can be pre-allocated in one shot.
+    let totalVerts = 0;
+    let totalRings = 0;
+    for (const shape of area.shapes)
+      for (const ct of shape) {
+        totalVerts += ct.o.length;
+        totalRings++;
+      }
+    const verts = new Float32Array(totalVerts * 2);
+    // rings[r] is the float index of the first vertex of ring r;
+    // rings[totalRings] is the sentinel (= verts.length).
+    const rings = new Int32Array(totalRings + 1);
+    let ringIdx = 0;
+    let vertOffset = 0;
+    for (const shape of area.shapes)
+      for (const ct of shape) {
+        rings[ringIdx++] = vertOffset;
+        vertOffset = decodeContourInto(ct, grid, verts, vertOffset);
+      }
+    rings[ringIdx] = vertOffset; // sentinel
+    return { color: `#${area.color}`, verts, rings };
+  });
 }
 
-/* Sum Float32Array bytes across all rings in a decoded frame result. */
+/* Sum the real byte footprint of a decoded frame.
+ * With single-buffer layout each area contributes its Float32 vertex data
+ * and the Int32 ring-index array; both are measured here so the cache budget
+ * tracks actual allocations, not just vertex bytes. */
 function frameBytes(areas) {
   if (!Array.isArray(areas)) return 0;
   let b = 0;
   for (const area of areas)
-    if (area && Array.isArray(area.shapes))
-      for (const shape of area.shapes)
-        for (const ring of shape)
-          if (ring && ring.byteLength) b += ring.byteLength;
+    if (area) {
+      if (area.verts) b += area.verts.byteLength;
+      if (area.rings) b += area.rings.byteLength;
+    }
   return b;
 }
 
@@ -193,15 +221,16 @@ function makeRadarLayerClass(L) {
       const map = this._map;
       paths = areas.map((area) => {
         const path = new Path2D();
-        for (const shape of area.shapes) {
-          for (const ring of shape) {
-            for (let i = 0; i < ring.length; i += 2) {
-              const pt = map.latLngToLayerPoint([ring[i], ring[i + 1]]);
-              if (i === 0) path.moveTo(pt.x, pt.y);
-              else path.lineTo(pt.x, pt.y);
-            }
-            path.closePath();
+        const { verts, rings } = area;
+        for (let r = 0; r < rings.length - 1; r++) {
+          const start = rings[r];
+          const end = rings[r + 1];
+          for (let i = start; i < end; i += 2) {
+            const pt = map.latLngToLayerPoint([verts[i], verts[i + 1]]);
+            if (i === start) path.moveTo(pt.x, pt.y);
+            else path.lineTo(pt.x, pt.y);
           }
+          path.closePath();
         }
         return { color: area.color, path };
       });
