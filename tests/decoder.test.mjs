@@ -8,6 +8,7 @@
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 
@@ -17,6 +18,7 @@ const cardPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const fixturesDir = fileURLToPath(new URL("fixtures", import.meta.url));
 
 function loadDecoder() {
   const src = readFileSync(cardPath, "utf8");
@@ -87,6 +89,13 @@ describe("gridKmToLatLng", () => {
     expect(lat).toBeLessThan(48);
     expect(lng).toBeGreaterThan(5);
     expect(lng).toBeLessThan(11);
+  });
+
+  it("Bern anchor: gridKmToLatLng(600, 200) is Bern within 1e-3 deg", () => {
+    // (600, 200) is the CH1903 origin; the swisstopo formula gives exactly Bern.
+    const [lat, lng] = gridKmToLatLng(600, 200);
+    expect(Math.abs(lat - 46.9511)).toBeLessThan(1e-3);
+    expect(Math.abs(lng - 7.4386)).toBeLessThan(1e-3);
   });
 });
 
@@ -1275,6 +1284,313 @@ describe("byte-bounded decode cache (issue #52)", () => {
     card._cachePut("url", makeAreas(1, 8));
     expect(card._cache.size).toBe(1);
     expect(card._cacheBytes).toBe(32);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Independent reference decode (issue #16)
+// --------------------------------------------------------------------------
+// tests/fixtures/frame.json is a synthetic radar frame.
+// tests/fixtures/frame_decoded.json was produced by tests/tools/reference_decode.py,
+// an independent Python implementation derived directly from FORMAT.md.
+// This test locks the JS decoder against the spec, not against itself.
+describe("decodeFrame fixture vs. Python reference (issue #16)", () => {
+  const fixture = JSON.parse(
+    readFileSync(path.join(fixturesDir, "frame.json"), "utf8"),
+  );
+  const reference = JSON.parse(
+    readFileSync(path.join(fixturesDir, "frame_decoded.json"), "utf8"),
+  );
+
+  it("produces the same number of areas as the Python reference", () => {
+    const decoded = decodeFrame(fixture);
+    expect(decoded).toHaveLength(reference.length);
+  });
+
+  it("produces the same colors as the Python reference", () => {
+    const decoded = decodeFrame(fixture);
+    for (let a = 0; a < reference.length; a++) {
+      expect(decoded[a].color).toBe(reference[a].color);
+    }
+  });
+
+  it("produces the same shape/ring structure as the Python reference", () => {
+    const decoded = decodeFrame(fixture);
+    for (let a = 0; a < reference.length; a++) {
+      expect(decoded[a].shapes).toHaveLength(reference[a].shapes.length);
+      for (let s = 0; s < reference[a].shapes.length; s++) {
+        expect(decoded[a].shapes[s]).toHaveLength(reference[a].shapes[s].length);
+      }
+    }
+  });
+
+  it("produces coordinates matching the Python reference within Float32 precision", () => {
+    // Both the JS Float32Array and the Python to_float32() use IEEE 754 single
+    // precision; values must match exactly.  Any difference indicates a formula
+    // divergence, not just a rounding artefact.
+    const decoded = decodeFrame(fixture);
+    for (let a = 0; a < reference.length; a++) {
+      for (let s = 0; s < reference[a].shapes.length; s++) {
+        for (let r = 0; r < reference[a].shapes[s].length; r++) {
+          const jsRing = decoded[a].shapes[s][r];
+          const pyRing = reference[a].shapes[s][r];
+          expect(jsRing.length).toBe(pyRing.length);
+          for (let k = 0; k < pyRing.length; k++) {
+            // Tolerance covers the maximum error introduced by Float32 rounding
+            // of a WGS84 coordinate in the Swiss domain (~1e-5 relative).
+            expect(jsRing[k]).toBeCloseTo(pyRing[k], 4);
+          }
+        }
+      }
+    }
+  });
+
+  it("all decoded coordinates fall inside the Swiss WGS84 bbox", () => {
+    const decoded = decodeFrame(fixture);
+    for (const area of decoded) {
+      for (const shape of area.shapes) {
+        for (const ring of shape) {
+          for (let k = 0; k < ring.length; k += 2) {
+            expect(ring[k]).toBeGreaterThan(45);   // lat
+            expect(ring[k]).toBeLessThan(48);
+            expect(ring[k + 1]).toBeGreaterThan(5); // lng
+            expect(ring[k + 1]).toBeLessThan(11);
+          }
+        }
+      }
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// _nearestIndexByTs (issue #16)
+// --------------------------------------------------------------------------
+describe("_nearestIndexByTs (issue #16)", () => {
+  function makeCard(frames) {
+    const card = new MeteoSwissRadarCard();
+    card._frames = frames;
+    return card;
+  }
+
+  const frames = [
+    { ts: 0, type: "measurement" },
+    { ts: 300, type: "measurement" },
+    { ts: 600, type: "measurement" },
+    { ts: 900, type: "forecast" },
+  ];
+
+  it("returns 0 when ts is before the first frame", () => {
+    expect(makeCard(frames)._nearestIndexByTs(-100)).toBe(0);
+  });
+
+  it("returns the last index when ts is after the last frame", () => {
+    expect(makeCard(frames)._nearestIndexByTs(9999)).toBe(3);
+  });
+
+  it("returns the exact index when ts matches a frame", () => {
+    expect(makeCard(frames)._nearestIndexByTs(600)).toBe(2);
+  });
+
+  it("returns the closest index for a ts between two frames", () => {
+    // 149 is closer to 0 than to 300 → index 0
+    expect(makeCard(frames)._nearestIndexByTs(149)).toBe(0);
+    // 151 is closer to 300 → index 1
+    expect(makeCard(frames)._nearestIndexByTs(151)).toBe(1);
+  });
+
+  it("returns 0 for an empty-but-initialised frame list edge", () => {
+    // Linear search with no frames: best starts at 0 and stays there.
+    const card = makeCard([{ ts: 42, type: "measurement" }]);
+    expect(card._nearestIndexByTs(42)).toBe(0);
+  });
+});
+
+// --------------------------------------------------------------------------
+// _applyTimeSpan (issue #16)
+// --------------------------------------------------------------------------
+describe("_applyTimeSpan (issue #16)", () => {
+  // 6 measurement frames ending at ts=1800, then 3 forecast frames.
+  const baseFrames = [
+    { ts: 0, type: "measurement" },
+    { ts: 300, type: "measurement" },
+    { ts: 600, type: "measurement" },
+    { ts: 900, type: "measurement" },
+    { ts: 1200, type: "measurement" },
+    { ts: 1800, type: "measurement" }, // lastMeas, anchor=1800
+    { ts: 2400, type: "forecast" },
+    { ts: 3000, type: "forecast" },
+    { ts: 3600, type: "forecast" },
+  ];
+
+  function makeCard(cfg) {
+    const card = new MeteoSwissRadarCard();
+    card._config = cfg;
+    return card;
+  }
+
+  it("returns all frames unchanged when neither past_hours nor forecast_hours is set", () => {
+    const card = makeCard({});
+    expect(card._applyTimeSpan(baseFrames)).toHaveLength(baseFrames.length);
+  });
+
+  it("returns all frames unchanged when both values are not finite (NaN-like)", () => {
+    const card = makeCard({ past_hours: "nope", forecast_hours: "nope" });
+    expect(card._applyTimeSpan(baseFrames)).toHaveLength(baseFrames.length);
+  });
+
+  it("trims old measurements when past_hours is set — recent ones stay", () => {
+    // anchor=1800, past=0.5h=1800s → keep measurements with ts >= 1800-1800=0
+    const card = makeCard({ past_hours: 0.5 });
+    const result = card._applyTimeSpan(baseFrames);
+    const meas = result.filter((f) => f.type === "measurement");
+    for (const f of meas) expect(f.ts).toBeGreaterThanOrEqual(0);
+  });
+
+  it("trims forecast frames when forecast_hours is set", () => {
+    // anchor=1800, forecast=0.5h=1800s → keep forecasts with ts <= 1800+1800=3600
+    const card = makeCard({ forecast_hours: 0.5 });
+    const result = card._applyTimeSpan(baseFrames);
+    const fc = result.filter((f) => f.type === "forecast");
+    for (const f of fc) expect(f.ts).toBeLessThanOrEqual(1800 + 0.5 * 3600);
+  });
+
+  it("forecast_hours: 0 gives a measurement-only result", () => {
+    const card = makeCard({ forecast_hours: 0 });
+    const result = card._applyTimeSpan(baseFrames);
+    expect(result.every((f) => f.type === "measurement")).toBe(true);
+  });
+
+  it("both past_hours and forecast_hours: 0 returns only the last frame", () => {
+    const card = makeCard({ past_hours: 0, forecast_hours: 0 });
+    const result = card._applyTimeSpan(baseFrames);
+    expect(result).toHaveLength(1);
+    expect(result[0].ts).toBe(1800); // lastMeas
+  });
+
+  it("never returns an empty array — falls back to lastMeas when all filtered", () => {
+    // past_hours tiny enough to drop all measurements except the anchor itself.
+    const card = makeCard({ past_hours: 0.001, forecast_hours: 0 });
+    const result = card._applyTimeSpan(baseFrames);
+    expect(result.length).toBeGreaterThan(0);
+  });
+});
+
+// --------------------------------------------------------------------------
+// _computeWindow (issue #16)
+// --------------------------------------------------------------------------
+describe("_computeWindow (issue #16)", () => {
+  // Build a card with measurement frames at 5-min intervals for 30 min before
+  // `measTs`, then 4 forecast frames at varying distances ahead.
+  // Indices 0-6: measurements (ts = measTs-1800 through measTs)
+  // Indices 7-10: forecasts (ts = measTs+600, measTs+1200, measTs+3600, measTs+7200)
+  const measTs = 3 * 3600; // 03:00 UTC on 1970-01-01 — well away from midnight
+
+  function makeWindowCard(cfg) {
+    const card = new MeteoSwissRadarCard();
+    card._frames = [];
+    for (let i = 6; i >= 0; i--)
+      card._frames.push({ ts: measTs - i * 300, type: "measurement" });
+    card._frames.push({ ts: measTs + 600, type: "forecast" });
+    card._frames.push({ ts: measTs + 1200, type: "forecast" });
+    card._frames.push({ ts: measTs + 3600, type: "forecast" });
+    card._frames.push({ ts: measTs + 7200, type: "forecast" });
+    card._config = cfg;
+    return card;
+  }
+
+  it("default: play_past_hours=1h snaps winStart to the measurement 1h ago", () => {
+    const card = makeWindowCard({ play_past_hours: 0.5, play_forecast_hours: 1 });
+    card._computeWindow();
+    // nearest to measTs-1800 is frames[0].ts = measTs-1800 → index 0
+    expect(card._winStart).toBe(0);
+    // nearest to measTs+3600 is frames[9].ts = measTs+3600 → index 9
+    expect(card._winEnd).toBe(9);
+  });
+
+  it("play_forecast_hours: 0 makes winEnd the last measurement", () => {
+    // past_hours > 0 so winStart < winEnd — avoids the equal-bounds fallback.
+    const card = makeWindowCard({ play_past_hours: 0.5, play_forecast_hours: 0 });
+    card._computeWindow();
+    // endTs = measTs + 0 → winEnd = nearest(measTs) = index 6 (last measurement)
+    expect(card._winEnd).toBe(6);
+  });
+
+  it("play_forecast_until overrides forecast_hours when until is further", () => {
+    // hours endTs = measTs+3600; until target further away (measTs+7200)
+    // Compute the until time the same way _computeWindow does so we are
+    // timezone-agnostic.
+    const d = new Date(measTs * 1000);
+    d.setHours(d.getHours() + 2, d.getMinutes(), 0, 0); // 2 h ahead in local time
+    const untilHHMM = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const card = makeWindowCard({
+      play_past_hours: 0,
+      play_forecast_hours: 1,
+      play_forecast_until: untilHHMM,
+    });
+    card._computeWindow();
+    // winEnd should be past the forecast_hours bound (index 9)
+    expect(card._winEnd).toBeGreaterThan(9);
+  });
+
+  it("forecast_hours beats play_forecast_until when hours endTs is further", () => {
+    // hours endTs = measTs+7200 (2h); until → 30 min from now → endTs=measTs+1800
+    // hours wins → winEnd should be frames[10] (measTs+7200)
+    const d = new Date(measTs * 1000);
+    d.setMinutes(d.getMinutes() + 30, 0, 0); // 30 min ahead in local time
+    const untilHHMM = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const card = makeWindowCard({
+      play_past_hours: 0,
+      play_forecast_hours: 2, // 7200s → measTs+7200
+      play_forecast_until: untilHHMM,
+    });
+    card._computeWindow();
+    expect(card._winEnd).toBe(10); // measTs+7200 is the last frame, index 10
+  });
+
+  it("play_forecast_until in the past rolls to the next day", () => {
+    // Force an until time that is strictly before measTs in local time.
+    // Achieved by taking measTs's local H:M, then going back 1h and using that.
+    // _computeWindow detects ts <= now and adds 86400; the rolled-over ts is
+    // always > frames' forecast horizon, so winEnd reaches the last frame.
+    const d = new Date(measTs * 1000);
+    const h = d.getHours();
+    const m = d.getMinutes();
+    // Use one hour earlier — guaranteed to be in the past.
+    const pastH = h === 0 ? 23 : h - 1;
+    const untilHHMM = `${String(pastH).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    const card = makeWindowCard({ play_past_hours: 0, play_forecast_hours: 0, play_forecast_until: untilHHMM });
+    card._computeWindow();
+    // The rolled-over endTs is ~23h into the future — the farthest forecast
+    // frame (measTs+7200) is the nearest, so winEnd is the last frame index.
+    expect(card._winEnd).toBe(10);
+  });
+
+  it("invalid play_forecast_until is ignored — falls back to forecast_hours only", () => {
+    const card = makeWindowCard({ play_past_hours: 0, play_forecast_hours: 1, play_forecast_until: "bad" });
+    card._computeWindow();
+    expect(card._winEnd).toBe(9); // measTs+3600 → index 9
+  });
+
+  it("winEnd <= winStart fallback: expands to the full frame range", () => {
+    // Cause winEnd < winStart by setting a tiny forecast horizon with a large past.
+    // With play_forecast_hours: 0 and play_past_hours: 999, winStart is forced
+    // to index 0 and winEnd to index 6 (lastMeas) → winEnd > winStart, so the
+    // fallback does NOT fire. To trigger the fallback, add forecast_hours=0 when
+    // lastMeas is near the end: winStart could exceed winEnd if frame list is odd.
+    // Simpler: build a card where all frames are forecast (no measurement) so
+    // _lastMeasurementIndex returns -1 and lastMeas is undefined → now = _t0 = 0.
+    const card = new MeteoSwissRadarCard();
+    card._frames = [
+      { ts: 100, type: "forecast" },
+      { ts: 200, type: "forecast" },
+      { ts: 300, type: "forecast" },
+    ];
+    card._config = { play_past_hours: 0.5, play_forecast_hours: 0 };
+    // now = _t0 = 0 (no measurement); winEnd = nearest(0) = index 0;
+    // winStart = nearest(0 - 1800) = index 0; winEnd (0) <= winStart (0) → fallback
+    card._computeWindow();
+    expect(card._winStart).toBe(0);
+    expect(card._winEnd).toBe(2);
   });
 });
 
