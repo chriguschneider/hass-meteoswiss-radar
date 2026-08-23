@@ -44,6 +44,7 @@ _ALLOWED_PATHS = (
 )
 
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
+_MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
 
 
 class MeteoSwissRadarProxyView(HomeAssistantView):
@@ -63,13 +64,28 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         session = async_get_clientsession(self._hass)
         try:
             async with session.get(
-                f"{UPSTREAM_BASE}/{tail}", timeout=_UPSTREAM_TIMEOUT
+                f"{UPSTREAM_BASE}/{tail}",
+                timeout=_UPSTREAM_TIMEOUT,
+                allow_redirects=False,
             ) as resp:
+                # 3xx: allowlisted product URLs never redirect; a redirect
+                # means something unexpected upstream — block it.
+                if 300 <= resp.status < 400:
+                    _LOGGER.warning(
+                        "Upstream %s redirected (%s)", tail, resp.status
+                    )
+                    return web.Response(status=502)
+                # 404 passes through unchanged: the card's manifest-rollover
+                # logic depends on detecting it via _is404().
+                if resp.status == 404:
+                    return web.Response(status=404)
+                # Relay upstream 401/403/5xx as 502 so the HA frontend does
+                # not mistake them for HA auth failures or trigger retries.
                 if resp.status != 200:
                     _LOGGER.warning(
                         "Upstream %s returned HTTP %s", tail, resp.status
                     )
-                    return web.Response(status=resp.status)
+                    return web.Response(status=502)
                 if "json" not in resp.headers.get("Content-Type", ""):
                     # A site relaunch serving HTML with 200 must not reach
                     # the card as a "valid" response.
@@ -79,8 +95,21 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                         resp.headers.get("Content-Type"),
                     )
                     return web.Response(status=502)
-                body = await resp.read()
-        except (TimeoutError, ClientError) as err:
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(65536):
+                    total += len(chunk)
+                    if total > _MAX_BODY_BYTES:
+                        _LOGGER.warning(
+                            "Upstream %s body exceeds %d bytes", tail, _MAX_BODY_BYTES
+                        )
+                        return web.Response(status=502)
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+        except TimeoutError:
+            _LOGGER.warning("Upstream request %s timed out", tail)
+            return web.Response(status=504)
+        except ClientError as err:
             _LOGGER.warning("Upstream request %s failed: %s", tail, err)
             return web.Response(status=502)
 
