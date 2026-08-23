@@ -10,7 +10,17 @@ flat scrubbing timeline in the HA accent color with hour/date labels, a
 measurement/forecast label and an intensity legend overlay, centered on
 your home location. The frame list refreshes itself while the
 card is open, and upstream breakage degrades to a clean banner instead of a
-broken card. Remaining before v1: HACS packaging.
+broken card.
+
+## Screenshot
+
+<!--
+  TODO(#18): drop a real card capture at docs/images/card.png and uncomment
+  the line below. Kept as a comment so the HACS store page never renders a
+  broken image. A live Home Assistant render is required, which cannot be
+  produced from CI.
+-->
+<!-- ![MeteoSwiss Radar card](docs/images/card.png) -->
 
 ## How it works
 
@@ -21,16 +31,41 @@ broken card. Remaining before v1: HACS packaging.
 - The card fetches the radar frames through the proxy and decodes the
   chain-code polygon format documented in [FORMAT.md](FORMAT.md).
 
-## Install (manual, for now)
+## Requirements
 
-1. Copy `custom_components/meteoswiss_radar/` into your HA `config/custom_components/`.
-2. Restart Home Assistant.
-3. Settings → Devices & Services → Add Integration → "MeteoSwiss Radar".
-4. Add the card to a dashboard:
+- **Home Assistant 2024.6.0 or newer.** The integration uses
+  `StaticPathConfig` / `async_register_static_paths` (2024.6) and
+  `ConfigFlowResult` (2024.4); older installs fail at import with a cryptic
+  `ImportError`.
+
+## Install (HACS)
+
+Not in the default HACS store yet — add it as a custom repository:
+
+1. HACS → three-dot menu → **Custom repositories**.
+2. Repository: `https://github.com/chriguschneider/hass-meteoswiss-radar`,
+   category: **Integration**. Add.
+3. Open **MeteoSwiss Radar** in HACS and **Download** it.
+4. **Restart Home Assistant.**
+5. Settings → Devices & Services → **Add Integration** → "MeteoSwiss Radar".
+6. Add the card to a dashboard:
 
 ```yaml
 type: custom:meteoswiss-radar-card
 ```
+
+The card JS is **auto-injected into every dashboard for every user** — the
+integration registers it as a frontend resource on setup, so there is no
+manual resource entry to add (YAML-mode dashboards included). By the same
+token, **uninstalling requires a Home Assistant restart** to fully unload
+the integration and stop serving the card.
+
+### Install (manual)
+
+1. Copy `custom_components/meteoswiss_radar/` into your HA `config/custom_components/`.
+2. Restart Home Assistant.
+3. Settings → Devices & Services → Add Integration → "MeteoSwiss Radar".
+4. Add the card as shown above.
 
 The card has a **visual editor** (dashboard card options UI); every option
 below can also be set there. The play button cycles three modes: paused ->
