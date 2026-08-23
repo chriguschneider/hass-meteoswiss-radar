@@ -1,4 +1,4 @@
-name: Claude (autopilot: grind the P-backlog)
+name: "Claude (autopilot: grind the P-backlog)"
 
 # Fully-automatic backlog clear for THIS repo (needs CI + branch protection +
 # the reviewer/auto-merge). Every 30 min: if no agent PR is currently open,
