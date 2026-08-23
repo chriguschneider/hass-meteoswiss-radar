@@ -510,3 +510,139 @@ describe("editor prunes default values from config (issue #4)", () => {
     expect(editor._config).toEqual({ type: "t", play_forecast_until: "18:00" });
   });
 });
+
+describe("Leaflet retry on transient failure (issue #6)", () => {
+  // Load the card into a vm context that stubs document.createElement so we
+  // control when script.onload / script.onerror fires without a real network.
+  function loadCardWithScriptStubs() {
+    const src = readFileSync(cardPath, "utf8");
+    const noop = () => {};
+    const registry = {
+      get: () => undefined,
+      define: noop,
+      whenDefined: () => Promise.resolve(),
+    };
+    const appendedScripts = [];
+    const ctx = {
+      window: { customElements: registry, customCards: [], L: undefined },
+      document: {
+        querySelector: () => null,
+        readyState: "complete",
+        addEventListener: noop,
+        createElement(tag) {
+          if (tag === "script") {
+            const el = { onload: null, onerror: null, src: "" };
+            return el;
+          }
+          return { setAttribute: noop, rel: "", href: "" };
+        },
+        head: {
+          appendChild(el) {
+            appendedScripts.push(el);
+          },
+        },
+        getElementById: () => null,
+        body: null,
+      },
+      customElements: registry,
+      HTMLElement: class {},
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init && init.detail;
+        }
+      },
+      console: { info: noop, warn: noop, error: noop },
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      Promise,
+      Date,
+      Math,
+      Array,
+      Object,
+      Number,
+      String,
+      Map,
+      Set,
+      JSON,
+      Intl,
+      requestAnimationFrame: noop,
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(
+      `${src}\n;globalThis.__card = { MeteoSwissRadarCard, loadLeaflet };`,
+      ctx,
+      { filename: "meteoswiss-radar-card.js" },
+    );
+    return { ctx, appendedScripts, ...ctx.__card };
+  }
+
+  it("loadLeaflet resets leafletLoader on onerror so next call retries", async () => {
+    const { loadLeaflet, appendedScripts } = loadCardWithScriptStubs();
+
+    // First call — trigger onerror.
+    const p1 = loadLeaflet();
+    expect(appendedScripts).toHaveLength(1);
+    appendedScripts[0].onerror();
+    await expect(p1).rejects.toThrow("Leaflet failed to load");
+
+    // Second call — leafletLoader was reset, so a new script element is created.
+    const p2 = loadLeaflet();
+    expect(appendedScripts).toHaveLength(2);
+    appendedScripts[1].onload();
+    // window.L is undefined in the stub, but the promise resolves (not rejects).
+    await expect(p2).resolves.toBeUndefined();
+  });
+
+  it("loadLeaflet returns the cached promise when the first load is still in flight", async () => {
+    const { loadLeaflet, appendedScripts } = loadCardWithScriptStubs();
+
+    const p1 = loadLeaflet();
+    const p2 = loadLeaflet();
+    // Only one script element should have been appended.
+    expect(appendedScripts).toHaveLength(1);
+    appendedScripts[0].onload();
+    await expect(p1).resolves.toBeUndefined();
+    await expect(p2).resolves.toBeUndefined();
+  });
+
+  it("_maybeInit resets _initialized on Leaflet failure so a retry is possible", async () => {
+    const { MeteoSwissRadarCard, appendedScripts, ctx } = loadCardWithScriptStubs();
+    const card = new MeteoSwissRadarCard();
+
+    // Provide the minimum state _maybeInit checks before proceeding.
+    card._hass = {};
+    Object.defineProperty(card, "isConnected", { get: () => true });
+
+    // Stub out DOM-heavy methods that aren't the focus of this test.
+    card._renderShell = () => {};
+    card._showError = (msg) => { card._lastError = msg; };
+
+    // Call _maybeInit — it sets _initialized = true, then awaits loadLeaflet().
+    const initPromise = card._maybeInit();
+    // Fire onerror on the script that loadLeaflet() injected.
+    expect(appendedScripts).toHaveLength(1);
+    appendedScripts[0].onerror();
+    await initPromise;
+
+    // _initialized must be false so a subsequent call can retry.
+    expect(card._initialized).toBe(false);
+    expect(card._lastError).toMatch(/Leaflet failed to load/);
+
+    // Simulate HA calling set hass() again (triggers _maybeInit retry).
+    // window.L must NOT be set yet — otherwise loadLeaflet() short-circuits.
+    card._createMap = () => {};
+    card._loadData = () => Promise.resolve();
+    card._startRefreshTimer = () => {};
+    const retryPromise = card._maybeInit();
+    expect(appendedScripts).toHaveLength(2);  // new script injected for the retry
+    ctx.window.L = { version: "1.9.4" };  // script sets window.L then fires onload
+    appendedScripts[1].onload();
+    await retryPromise;
+
+    expect(card._initialized).toBe(true);  // recovered without page reload
+  });
+});

@@ -31,7 +31,7 @@ function loadLeaflet() {
       const script = document.createElement("script");
       script.src = `${FRONTEND_BASE}/vendor/leaflet.js`;
       script.onload = () => resolve(window.L);
-      script.onerror = () => reject(new Error("Leaflet failed to load"));
+      script.onerror = () => { leafletLoader = null; reject(new Error("Leaflet failed to load")); };
       document.head.appendChild(script);
     });
   }
@@ -381,7 +381,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._L = await loadLeaflet();
       this._createMap(this._L);
     } catch (err) {
-      // Vendored asset missing/broken — not recoverable at runtime.
+      // Script load failed (e.g. flaky network). Reset so the next hass/
+      // connectedCallback call retries rather than staying permanently broken.
+      this._initialized = false;
       this._showError(err.message || String(err));
       return;
     }
