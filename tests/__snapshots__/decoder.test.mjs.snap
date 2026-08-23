@@ -4,15 +4,15 @@ exports[`decodeFrame > matches the golden geometry (locks decoder + projection) 
 [
   {
     "color": "#9e849a",
-    "shapes": [
-      [
-        Float32Array [
-          46.59613037109375,
-          7.569136142730713,
-          46.60060501098633,
-          7.582179546356201,
-        ],
-      ],
+    "rings": Int32Array [
+      0,
+      4,
+    ],
+    "verts": Float32Array [
+      46.59613037109375,
+      7.569136142730713,
+      46.60060501098633,
+      7.582179546356201,
     ],
   },
 ]
