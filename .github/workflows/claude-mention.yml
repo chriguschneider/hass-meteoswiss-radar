@@ -16,9 +16,14 @@ on:
 # Don't run on our own bot comments or on unrelated chatter.
 jobs:
   claude:
+    # Only the owner / collaborators can trigger this. Comment events carry
+    # secrets even from strangers, so gate the @claude path on author role
+    # (issue-assignment is already write-access-only).
     if: >-
       github.event_name == 'issues' ||
-      contains(github.event.comment.body, '@claude')
+      (contains(github.event.comment.body, '@claude') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: write
