@@ -68,7 +68,7 @@ function decodeContour(contour, grid) {
   const d = contour.d;
   const o = contour.o;
   const n = o.length;
-  const points = new Array(n);
+  const points = new Float32Array(n * 2); // lat/lng interleaved
   for (let s = 0; s < n; s++) {
     const off = (o.charCodeAt(s) - 48) / 10 + 0.05;
     let x, y;
@@ -79,7 +79,9 @@ function decodeContour(contour, grid) {
       x = grid.xMin + (grid.xSpan * ((i - 1) / 2 + off)) / grid.xCount;
       y = grid.yMin + (grid.ySpan * (j / 2)) / grid.yCount;
     }
-    points[s] = gridKmToLatLng(x, y);
+    const ll = gridKmToLatLng(x, y);
+    points[s * 2] = ll[0];
+    points[s * 2 + 1] = ll[1];
     if (s < n - 1) {
       i += d.charCodeAt(2 * s) - 77;
       j += d.charCodeAt(2 * s + 1) - 77;
@@ -118,6 +120,7 @@ function makeRadarLayerClass(L) {
   return L.Layer.extend({
     initialize() {
       this._pathCache = new Map(); // url -> [{color, path}]
+      this._pathCacheMax = PATH_CACHE_SIZE;
     },
 
     onAdd(map) {
@@ -172,8 +175,8 @@ function makeRadarLayerClass(L) {
         const path = new Path2D();
         for (const shape of area.shapes) {
           for (const ring of shape) {
-            for (let i = 0; i < ring.length; i++) {
-              const pt = map.latLngToLayerPoint(ring[i]);
+            for (let i = 0; i < ring.length; i += 2) {
+              const pt = map.latLngToLayerPoint([ring[i], ring[i + 1]]);
               if (i === 0) path.moveTo(pt.x, pt.y);
               else path.lineTo(pt.x, pt.y);
             }
@@ -183,7 +186,7 @@ function makeRadarLayerClass(L) {
         return { color: area.color, path };
       });
       this._pathCache.set(url, paths);
-      while (this._pathCache.size > PATH_CACHE_SIZE) {
+      while (this._pathCache.size > this._pathCacheMax) {
         this._pathCache.delete(this._pathCache.keys().next().value);
       }
       return paths;
@@ -218,6 +221,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   constructor() {
     super();
     this._cache = new Map(); // radar_url -> decoded areas
+    this._cacheMax = CACHE_SIZE; // raised to frames.length + margin after first manifest
     this._pending = new Map(); // radar_url -> Promise
     this._retryAfter = new Map(); // radar_url -> earliest retry timestamp (ms)
     this._frames = [];
@@ -705,6 +709,11 @@ class MeteoSwissRadarCard extends HTMLElement {
       : null;
     this._animVersion = version;
     this._frames = frames;
+    // Grow the caches to hold all manifest frames so full-mode playback
+    // completes a second loop pass without any refetch/redecode.
+    const newCacheMax = frames.length + 10;
+    this._cacheMax = newCacheMax;
+    if (this._radar) this._radar._pathCacheMax = newCacheMax;
     const measCount = frames.filter((f) => f.type === "measurement").length;
     // Positions map TIME, not frame index: the cadence is mixed (5-min
     // measurement, 5/10-min forecast), so index fractions drift off the axis.
@@ -918,7 +927,7 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _cachePut(url, v) {
     this._cache.set(url, v);
-    while (this._cache.size > CACHE_SIZE) {
+    while (this._cache.size > this._cacheMax) {
       this._cache.delete(this._cache.keys().next().value);
     }
   }

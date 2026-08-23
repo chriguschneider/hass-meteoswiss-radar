@@ -111,14 +111,15 @@ describe("decodeFrame", () => {
     expect(decoded[0].shapes[0]).toHaveLength(1);
   });
 
-  it("emits one vertex per digit in o, each inside the Swiss bbox", () => {
+  it("emits a Float32Array with 2 floats per vertex, each inside the Swiss bbox", () => {
     const ring = decodeFrame(frame)[0].shapes[0][0];
-    expect(ring).toHaveLength(2);
-    for (const [lat, lng] of ring) {
-      expect(lat).toBeGreaterThan(45);
-      expect(lat).toBeLessThan(48);
-      expect(lng).toBeGreaterThan(5);
-      expect(lng).toBeLessThan(11);
+    expect(Object.prototype.toString.call(ring)).toBe("[object Float32Array]");
+    expect(ring.length).toBe(4); // 2 vertices * 2 (lat, lng)
+    for (let i = 0; i < ring.length; i += 2) {
+      expect(ring[i]).toBeGreaterThan(45);     // lat
+      expect(ring[i]).toBeLessThan(48);
+      expect(ring[i + 1]).toBeGreaterThan(5);  // lng
+      expect(ring[i + 1]).toBeLessThan(11);
     }
   });
 
@@ -706,6 +707,90 @@ describe("Leaflet retry on transient failure (issue #6)", () => {
     await retryPromise;
 
     expect(card._initialized).toBe(true);  // recovered without page reload
+  });
+});
+
+describe("typed-array geometry storage (issue #14)", () => {
+  const frame = {
+    coords: GRID,
+    areas: [
+      {
+        color: "9e849a",
+        shapes: [[{ i: 710, j: 641, o: "50", d: "OO" }]],
+      },
+    ],
+  };
+
+  it("ring is a typed array with 4 bytes per element (Float32Array)", () => {
+    const ring = decodeFrame(frame)[0].shapes[0][0];
+    // Float32Array has BYTES_PER_ELEMENT=4; a plain Array has none.
+    // Cross-vm-realm instanceof is unreliable, so check the TypedArray tag.
+    expect(Object.prototype.toString.call(ring)).toBe("[object Float32Array]");
+    expect(ring.BYTES_PER_ELEMENT).toBe(4);
+  });
+
+  it("length is vertices*2 (interleaved lat/lng)", () => {
+    const ring = decodeFrame(frame)[0].shapes[0][0];
+    // 2 chars in o -> 2 vertices -> 4 floats
+    expect(ring.length).toBe(4);
+  });
+
+  it("preserves area/shape/ring count independent of storage format", () => {
+    const decoded = decodeFrame(frame);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0].shapes).toHaveLength(1);
+    expect(decoded[0].shapes[0]).toHaveLength(1);
+  });
+});
+
+describe("dynamic cache sizing (issue #14)", () => {
+  it("_cachePut evicts to _cacheMax, not the fixed constant", () => {
+    const card = new MeteoSwissRadarCard();
+    card._cacheMax = 3;
+    for (let i = 0; i < 5; i++) card._cachePut(`url-${i}`, i);
+    expect(card._cache.size).toBe(3);
+    // Most-recently inserted values survive; oldest are evicted LRU.
+    expect(card._cacheGet("url-4")).toBe(4);
+    expect(card._cacheGet("url-0")).toBeUndefined();
+  });
+
+  it("_cacheMax is raised after _refreshManifest so all frames stay cached", async () => {
+    const card = new MeteoSwissRadarCard();
+    const nFrames = 295;
+    const pics = Array.from({ length: nFrames }, (_, i) => ({
+      radar_url: `frame-${i}`,
+      data_type: "measurement",
+      day: "23.08.2026",
+      timepoint: "00:00",
+      timestamp: i * 300,
+    }));
+    card._config = {}; // needed by _applyTimeSpan (returns all frames unchanged when empty)
+    card._api = (path) => {
+      if (path.includes("versions.json")) {
+        return Promise.resolve({ "precipitation/animation": "20260823_1200" });
+      }
+      return Promise.resolve({
+        map_images: [{ pictures: pics }],
+        legend: [],
+      });
+    };
+    // Stub DOM-touching side effects that _refreshManifest calls.
+    card._tMeas = { style: {} };
+    card._tFc = { style: {} };
+    card._tNow = { style: {}, hidden: false };
+    card._modeHint = { hidden: false };
+    card._renderLegend = () => {};
+    card._buildTimelineLabels = () => {};
+    card._computeWindow = () => {};
+    card._maybeResumeAfterFailure = () => {};
+
+    await card._refreshManifest(true);
+
+    // Cache cap must accommodate every frame in the manifest + margin.
+    expect(card._cacheMax).toBe(nFrames + 10);
+    // Ensure a full manifest of frames can be stored without eviction.
+    for (let i = 0; i < nFrames; i++) card._cachePut(`frame-${i}`, i);
+    expect(card._cache.size).toBe(nFrames);
   });
 });
 
