@@ -54,6 +54,15 @@ To force a human check on anything, add the **`needs-verification`** label to
 the issue or PR. Auto-merge respects branch protection (required checks pass
 first). Reviewer = Opus, author = Sonnet, so it is not grading its own work.
 
+## Autopilot: backlog grind (experimental, this repo)
+
+`claude-autopilot.yml` clears the P-labelled backlog hands-off: every 30 min,
+**if no agent PR is open**, it takes the next open P-issue, opens a draft PR,
+the reviewer auto-merges it, and the next tick takes the next — until the
+backlog is empty. One PR at a time (no conflicts). Skips tests/CI/tracking
+issues (no P-label) and anything `needs-verification`. Needs CI + branch
+protection + the reviewer. Pause it by disabling the workflow in Actions.
+
 ## Setup (one-time)
 
 Install the Claude GitHub App and add the repo secret

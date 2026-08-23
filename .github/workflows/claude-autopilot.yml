@@ -1,0 +1,83 @@
+name: Claude (autopilot: grind the P-backlog)
+
+# Fully-automatic backlog clear for THIS repo (needs CI + branch protection +
+# the reviewer/auto-merge). Every 30 min: if no agent PR is currently open,
+# take the next open P-issue directly and open a draft PR. The reviewer then
+# auto-merges it; the next tick takes the next issue. Stops on its own when
+# the backlog is empty or an open PR is waiting (e.g. needs-verification).
+#
+# One at a time (the open-PR gate) → no same-file conflicts, no quota spike.
+# To pause: disable this workflow in the Actions tab.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: claude-autopilot
+  cancel-in-progress: false
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Gate: never start a second issue while an agent PR is still open.
+      - name: Check for an open agent PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          open="$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("claude/"))] | length')"
+          echo "open=$open" >> "$GITHUB_OUTPUT"
+          echo "open agent PRs: $open"
+
+      - name: Pick next issue
+        id: next
+        if: steps.gate.outputs.open == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/pick-next-issue.sh >> "$GITHUB_OUTPUT"
+
+      - name: Pick model
+        id: model
+        if: steps.gate.outputs.open == '0' && steps.next.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/pick-model.sh "${{ steps.next.outputs.number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Implement and open a draft PR
+        if: steps.gate.outputs.open == '0' && steps.next.outputs.number != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40 --dangerously-skip-permissions"
+          prompt: |
+            You are working, unattended, on GitHub issue
+            #${{ steps.next.outputs.number }} of this repository. Read AGENTS.md
+            and docs/adr/ FIRST and follow them.
+
+            Rules (non-negotiable):
+            - Work on a branch `claude/${{ steps.next.outputs.number }}-<short-slug>`.
+              NEVER push to the default branch.
+            - Implement the issue, add/update tests, and make the checks pass
+              (`npm ci && npm test && npm run check`,
+              `ruff check custom_components tests && pytest -q`).
+            - You CANNOT modify `.github/workflows/`. If the fix needs that, say
+              so in the PR and stop.
+            - Open a **draft** PR (`gh pr create --draft`) against the default
+              branch, `Closes #${{ steps.next.outputs.number }}`, summarising the
+              change and how you verified it. The reviewer takes it from here.
+            - If the issue is ambiguous or you cannot verify the fix, DO NOT
+              guess: open the draft PR with partial work and a clear
+              "Blocked / needs decision" section, and stop.
