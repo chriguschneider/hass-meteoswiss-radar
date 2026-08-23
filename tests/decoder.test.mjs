@@ -35,6 +35,12 @@ function loadDecoder() {
     },
     customElements: registry,
     HTMLElement: class {},
+    CustomEvent: class {
+      constructor(type, init) {
+        this.type = type;
+        this.detail = init && init.detail;
+      }
+    },
     console: { info: noop, warn: noop, error: noop },
     setTimeout,
     clearTimeout,
@@ -53,14 +59,15 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, MeteoSwissRadarCard };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, MeteoSwissRadarCard } = loadDecoder();
+const { gridKmToLatLng, decodeFrame, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS } =
+  loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
 const GRID = {
@@ -453,5 +460,53 @@ describe("transient-failure recovery (issue #2)", () => {
       card._maybeResumeAfterFailure();
       expect(card._started).toEqual([]);
     });
+  });
+});
+
+describe("editor prunes default values from config (issue #4)", () => {
+  // A bare editor is enough: _emit touches only _config plus the two
+  // side-effects we stub (form refresh + the config-changed dispatch).
+  function makeEditor(config) {
+    const editor = new MeteoSwissRadarCardEditor();
+    editor._config = config;
+    editor._updateForms = () => {};
+    editor._emitted = [];
+    editor.dispatchEvent = (ev) => {
+      editor._emitted.push(ev.detail.config);
+      return true;
+    };
+    return editor;
+  }
+
+  it("emits only type + the one non-default field the user changed", () => {
+    // Fresh card, edit only height: ha-form feeds back the full defaults-merged
+    // object, so _emit must strip every key still sitting at its default.
+    const editor = makeEditor({ type: "custom:meteoswiss-radar-card" });
+    editor._emit({ type: "custom:meteoswiss-radar-card", ...EDITOR_DEFAULTS, height: 500 });
+    expect(editor._config).toEqual({ type: "custom:meteoswiss-radar-card", height: 500 });
+  });
+
+  it("keeps a boolean toggled to its non-default false value", () => {
+    const editor = makeEditor({ type: "t" });
+    editor._emit({ type: "t", ...EDITOR_DEFAULTS, legend: false });
+    expect(editor._config).toEqual({ type: "t", legend: false });
+  });
+
+  it("removes a key when a field is set back to its default", () => {
+    const editor = makeEditor({ type: "t", zoom: 10 });
+    editor._emit({ type: "t", ...EDITOR_DEFAULTS, zoom: EDITOR_DEFAULTS.zoom });
+    expect(editor._config).toEqual({ type: "t" });
+  });
+
+  it("still prunes undefined/null/empty-string values", () => {
+    const editor = makeEditor({ type: "t" });
+    editor._emit({ type: "t", play_forecast_until: "", frame_stride: undefined, height: null });
+    expect(editor._config).toEqual({ type: "t" });
+  });
+
+  it("preserves keys that have no default (they are never pruned by value)", () => {
+    const editor = makeEditor({ type: "t" });
+    editor._emit({ type: "t", play_forecast_until: "18:00", ...EDITOR_DEFAULTS });
+    expect(editor._config).toEqual({ type: "t", play_forecast_until: "18:00" });
   });
 });

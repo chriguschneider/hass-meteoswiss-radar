@@ -1384,6 +1384,11 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     for (const key of Object.keys(config)) {
       if (config[key] === undefined || config[key] === null || config[key] === "") {
         delete config[key];
+      } else if (key in EDITOR_DEFAULTS && config[key] === EDITOR_DEFAULTS[key]) {
+        // Drop keys left at their default so we do not bloat the user's YAML
+        // and future default changes still reach them. Non-default values
+        // (including booleans set to false) survive the strict equality check.
+        delete config[key];
       }
     }
     this._config = config;
