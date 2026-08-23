@@ -64,23 +64,26 @@ jobs:
             2. FIX substantive problems yourself on the PR branch (commit +
                push). Re-run the checks. **At most 3 fix rounds.** Do not fix
                pure style nits. Never push to `master`.
-            3. DECIDE (exactly one):
-               a. HOLD for a human if ANY of these is true: the change needs
-                  live Home Assistant / visual / hardware behaviour that tests
-                  cannot cover; OR the PR or its linked issue has the
-                  `needs-verification` label; OR the issue text explicitly asks
-                  for user/HA verification; OR after 3 rounds it is still not
-                  solid. Then: add the `needs-verification` label to the PR
-                  (`gh pr edit $PR --add-label needs-verification`), post a
-                  comment (`gh pr comment $PR`) listing exactly what a human
-                  must check (and any unresolved findings), and STOP. Do NOT
-                  merge.
-               b. AUTO-MERGE if the checks are green and you found no
-                  substantive issue and no verification is required: mark it
-                  ready (`gh pr ready $PR`), post a short comment ("LGTM" +
-                  one-line rationale + what you fixed, if anything), and enable
-                  auto-merge (`gh pr merge $PR --auto --squash`). GitHub merges
-                  once the required checks pass. Do NOT use `--approve` (you
-                  cannot approve the app's own PR) and do NOT force a merge.
+            3. DECIDE — DEFAULT TO AUTO-MERGE:
+               b. AUTO-MERGE whenever the checks are green and the change is
+                  logically sound — INCLUDING card / rendering / UI changes. Do
+                  NOT hold a change just because it touches the UI or "would be
+                  nice to eyeball"; trust the passing tests plus your own
+                  review. Mark it ready (`gh pr ready $PR`), post a short comment
+                  ("LGTM" + one-line rationale + what you fixed, if anything),
+                  and enable auto-merge (`gh pr merge $PR --auto --squash`). Do
+                  NOT use `--approve` (you cannot approve the app's own PR) and
+                  do NOT force a merge.
+               a. HOLD (`needs-verification`) ONLY in the rare case where the
+                  change genuinely cannot be judged without live hardware or
+                  human interaction AND a regression would be clearly
+                  user-visible — e.g. touch/pointer gestures, real device input,
+                  exact pixel output with no test coverage. Also hold if the PR
+                  or its issue already carries `needs-verification`, or you found
+                  a real problem you could not fix within 3 rounds. Then add the
+                  `needs-verification` label, comment exactly what a human must
+                  check, and STOP.
 
-            Never bypass required checks. When in doubt, HOLD for a human.
+            Never bypass required checks. When unsure between the two, prefer
+            AUTO-MERGE — the tests are green. Hold only for genuine
+            hardware/input behaviour.
