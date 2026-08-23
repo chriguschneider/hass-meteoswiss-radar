@@ -388,6 +388,10 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!this._initialized) return;
     this._pause();
     this._stopRecoveryTimer();
+    if (this._timelineResizeObserver) {
+      this._timelineResizeObserver.disconnect();
+      this._timelineResizeObserver = null;
+    }
     if (this._refreshTimer) {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
@@ -531,7 +535,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         }
         #datesrow { position: relative; height: 15px; }
         #datesrow .daysep {
-          position: absolute; top: -19px; bottom: 1px; width: 1.5px;
+          position: absolute; top: -19px; bottom: 1px; width: 1px;
           background: var(--secondary-text-color, #999); opacity: 0.65;
         }
         #datesrow b {
@@ -672,6 +676,15 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._trackWrap.addEventListener("lostpointercapture", () => {
       this._trackScrubbing = false;
     });
+    if (this._timelineResizeObserver) {
+      this._timelineResizeObserver.disconnect();
+    }
+    if (typeof ResizeObserver !== "undefined") {
+      this._timelineResizeObserver = new ResizeObserver(() => {
+        this._buildTimelineLabels();
+      });
+      this._timelineResizeObserver.observe(this._hoursRow);
+    }
   }
 
   _createMap(L) {
@@ -858,30 +871,36 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   /* Hour labels sit right of a small separator at each 6-h mark; the date
    * label sits right of the day-change line, which runs continuously from
-   * the bottom of the date row up through the hour row. */
+   * the bottom of the date row up through the hour row.
+   *
+   * Separators are positioned in pixels (not percentages) to snap to the
+   * device pixel grid and render at consistent thickness. Positions are
+   * recomputed on resize to stay aligned with labels when the card width
+   * changes. */
   _buildTimelineLabels() {
     if (!this._config.time_axis || this._frames.length < 2) return;
     const frames = this._frames;
     const t0 = frames[0].ts;
     const t1 = frames[frames.length - 1].ts;
     const span = t1 - t0;
+    const rowWidth = this._hoursRow.offsetWidth;
     this._hoursRow.textContent = "";
     this._datesRow.textContent = "";
     const firstHour = Math.ceil(t0 / 3600) * 3600;
     for (let t = firstHour; t <= t1; t += 3600) {
       const d = new Date(t * 1000);
       if (d.getHours() % 6 !== 0) continue;
-      const x = ((t - t0) / span) * 100;
-      if (x < 0.5 || x > 91) continue; // left-aligned labels need room
+      const percentX = ((t - t0) / span) * 100;
+      if (percentX < 0.5 || percentX > 91) continue; // left-aligned labels need room
       if (d.getHours() !== 0) {
         // midnight gets the continuous day line instead of a short one
         const sep = document.createElement("div");
         sep.className = "hsep";
-        sep.style.left = x + "%";
+        sep.style.left = Math.round(percentX / 100 * rowWidth) + "px";
         this._hoursRow.appendChild(sep);
       }
       const b = document.createElement("b");
-      b.style.left = `calc(${x.toFixed(2)}% + 4px)`;
+      b.style.left = (Math.round(percentX / 100 * rowWidth) + 4) + "px";
       b.textContent = String(d.getHours()).padStart(2, "0") + ":00";
       this._hoursRow.appendChild(b);
     }
@@ -895,17 +914,18 @@ class MeteoSwissRadarCard extends HTMLElement {
       const visStart = Math.max(dayStart, t0);
       const visEnd = Math.min(dayEnd, t1);
       const width = ((visEnd - visStart) / span) * 100;
-      const x = ((visStart - t0) / span) * 100;
+      const percentX = ((visStart - t0) / span) * 100;
       if (!first) {
         const sep = document.createElement("div");
         sep.className = "daysep";
-        sep.style.left = x + "%";
+        sep.style.left = Math.round(percentX / 100 * rowWidth) + "px";
         this._datesRow.appendChild(sep);
       }
       if (width >= 4) {
         const d = new Date(visStart * 1000);
         const b = document.createElement("b");
-        b.style.left = first ? "0" : `calc(${x.toFixed(2)}% + 5px)`;
+        const pixelOffset = Math.round(percentX / 100 * rowWidth);
+        b.style.left = first ? "0" : (pixelOffset + 5) + "px";
         b.textContent =
           width < 8
             ? weekdayShort(visStart)
