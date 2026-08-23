@@ -14,9 +14,17 @@ model is chosen per issue from its labels.
 | `P3` or `good first issue` | `claude-haiku-4-5` (trivial / mechanical) |
 | anything else (`P2`, `tests`, `release`, unlabelled) | `claude-sonnet-4-6` (default) |
 
-## 1. Scheduled backlog (`claude-scheduled.yml`)
+## 1. Backlog worker (`claude-scheduled.yml`)
 
-Cron every 6 hours (plus a manual "Run workflow" button). Each run:
+Runs on three triggers:
+
+- **when you merge an agent draft PR** (`claude/*`) — the next issue starts
+  immediately, so the backlog is paced by *your review*: one open agent PR at a
+  time instead of a new one every few hours whether or not you kept up,
+- **once a day** (cron `0 8 * * *`) as a safety heartbeat if nothing was merged,
+- **manually** via Actions → "Run workflow".
+
+Each run:
 
 1. picks the next open issue in priority order (`pick-next-issue.sh`: P1 > P2 >
    P3, skips assigned issues, issues labelled `agent:in-progress`, and the
@@ -24,8 +32,8 @@ Cron every 6 hours (plus a manual "Run workflow" button). Each run:
 2. claims it with the `agent:in-progress` label so the next run skips it,
 3. implements it on a `claude/<n>-<slug>` branch and opens a **draft** PR.
 
-The clock only says "go" — the workflow itself figures out *which* issue via the
-labels and the tracking issue. Change the cadence by editing the `cron` line.
+To start the chain after a quiet period, merge an agent PR or trigger a run
+manually; each merge then pulls the next issue automatically.
 
 ## 2. On @claude mention (`claude-mention.yml`)
 
