@@ -1,4 +1,4 @@
-"""Unit tests for MeteoSwissRadarProxyView hardening and caching (issues #10, #11).
+"""Unit tests for MeteoSwissRadarProxyView hardening and caching (issues #10, #11, #17).
 
 These tests run with stdlib + pytest only (no aiohttp, no HA installed):
 sys.modules is patched before importing the component so all HA/aiohttp
@@ -11,7 +11,9 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +72,13 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha_http.StaticPathConfig = MagicMock()  # type: ignore[attr-defined]
     ha_cfg = ModuleType("homeassistant.config_entries")
     ha_cfg.ConfigEntry = object  # type: ignore[attr-defined]
+
+    class _ConfigFlow:
+        def __init_subclass__(cls, domain: str | None = None, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+
+    ha_cfg.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
+    ha_cfg.ConfigFlowResult = dict  # type: ignore[attr-defined]
     ha_core = ModuleType("homeassistant.core")
     ha_core.HomeAssistant = object  # type: ignore[attr-defined]
     ha_helpers = ModuleType("homeassistant.helpers")
@@ -99,6 +108,7 @@ from custom_components.meteoswiss_radar import (  # noqa: E402
     _LRU_MAX,
     _MAX_BODY_BYTES,
     _VERSIONS_TTL,
+    async_setup_entry,
 )
 
 # Shorthand used in every test.
@@ -108,6 +118,10 @@ _ANIMATION_TAIL = (
     "/version__20240101_1200/en/animation.json"
 )
 _RADAR_TAIL = "product/output/radar/rzc/radar_rzc.20240101_1200.json"
+_INCA_TAIL = (
+    "product/output/inca/precipitation/rate"
+    "/version__20240101_1200/rate_20240101_1200.json"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -475,3 +489,128 @@ def test_lru_does_not_cache_versions_json() -> None:
     v._cache_put(_VERSIONS_TAIL, b'{"version": 1}')
     assert _VERSIONS_TAIL not in v._lru
     assert v._versions_cache is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests: allowlist — all four legal path forms reach upstream (positive)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tail", [
+    _VERSIONS_TAIL,
+    _ANIMATION_TAIL,
+    _RADAR_TAIL,
+    _INCA_TAIL,
+])
+def test_allowed_path_reaches_upstream(tail: str) -> None:
+    """Every allowed path form must contact upstream and return 200."""
+    session, calls = _counting_upstream()
+    v = _view()
+    _inject_session(v, session)
+    resp = _get(v, tail)
+    assert resp.status == 200
+    assert len(calls) == 1, f"upstream must be called once for {tail!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: allowlist — disallowed paths blocked before upstream (negative)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tail", [
+    # Traversal as prefix
+    "../product/output/versions.json",
+    "%2e%2e%2fproduct/output/versions.json",
+    "..%2fproduct/output/versions.json",
+    # Embedded traversal
+    "product/output/../output/versions.json",
+    # Prefix junk
+    "xproduct/output/versions.json",
+    # Suffix junk
+    "product/output/versions.json.bak",
+    # Query smuggling via literal ?/#
+    "product/output/versions.json?foo=bar",
+    "product/output/versions.json#anchor",
+    # Query smuggling via percent-encoded ?
+    "product/output/versions.json%3ffoo=bar",
+    # Wrong digit count in timestamp (radar)
+    "product/output/radar/rzc/radar_rzc.2024010_1200.json",   # 7-digit date
+    "product/output/radar/rzc/radar_rzc.20240101_120.json",   # 3-digit time
+    # Language code wrong length (animation): must be exactly [a-z]{2}
+    "product/output/precipitation/animation/version__20240101_1200/eng/animation.json",
+    "product/output/precipitation/animation/version__20240101_1200/12/animation.json",
+    # INCA path outside precipitation/rate
+    "product/output/inca/wind/rate/version__20240101_1200/rate_20240101_1200.json",
+    "product/output/inca/precipitation/other/version__20240101_1200/other_20240101_1200.json",
+])
+def test_disallowed_path_returns_404_without_upstream(tail: str) -> None:
+    """Blocked paths must return 404; upstream must never be contacted."""
+    session, calls = _counting_upstream()
+    v = _view()
+    _inject_session(v, session)
+    resp = _get(v, tail)
+    assert resp.status == 404
+    assert len(calls) == 0, f"upstream must not be contacted for {tail!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Cache-Control headers
+# ---------------------------------------------------------------------------
+
+def test_versions_json_cache_control_is_no_store() -> None:
+    v = _view()
+    _inject_session(v, _fake_upstream(body=b'{"version": 1}'))
+    resp = _get(v, _VERSIONS_TAIL)
+    assert resp.status == 200
+    assert resp._explicit_headers.get("Cache-Control") == "no-store"
+
+
+@pytest.mark.parametrize("tail", [_ANIMATION_TAIL, _RADAR_TAIL, _INCA_TAIL])
+def test_immutable_path_cache_control_is_private(tail: str) -> None:
+    """Immutable frames must use private (not public) max-age caching.
+
+    private instead of public: the proxy endpoint requires HA auth, so
+    responses must never be stored in a shared cache (see issue #57).
+    """
+    v = _view()
+    _inject_session(v, _fake_upstream(body=b'{"frames": []}'))
+    resp = _get(v, tail)
+    assert resp.status == 200
+    cc = resp._explicit_headers.get("Cache-Control", "")
+    assert "private" in cc
+    assert "max-age=86400" in cc
+    assert "immutable" in cc
+    assert "public" not in cc
+
+
+# ---------------------------------------------------------------------------
+# Tests: lifecycle
+# ---------------------------------------------------------------------------
+
+def test_async_setup_entry_is_idempotent() -> None:
+    """Second async_setup_entry must return True without registering views again."""
+    hass = MagicMock()
+    hass.data = {}
+    hass.http.async_register_static_paths = AsyncMock()
+    entry = MagicMock()
+
+    _run(async_setup_entry(hass, entry))
+    first_count = hass.http.register_view.call_count
+
+    _run(async_setup_entry(hass, entry))
+    second_count = hass.http.register_view.call_count
+
+    assert first_count == 2, "expected two view registrations on first setup"
+    assert second_count == 2, "second setup must not register views again"
+
+
+def test_config_flow_aborts_on_second_instance() -> None:
+    """async_step_user must abort with single_instance_allowed when an entry exists."""
+    from custom_components.meteoswiss_radar.config_flow import (
+        MeteoSwissRadarConfigFlow,
+    )
+
+    flow = object.__new__(MeteoSwissRadarConfigFlow)
+    flow._async_current_entries = lambda: [object()]
+    flow.async_abort = lambda reason: {"type": "abort", "reason": reason}
+
+    result = _run(flow.async_step_user())
+    assert result == {"type": "abort", "reason": "single_instance_allowed"}
