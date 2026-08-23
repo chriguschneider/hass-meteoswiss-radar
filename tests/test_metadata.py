@@ -78,6 +78,15 @@ def test_vendor_urls_contain_version() -> None:
     )
 
 
+def test_unversioned_vendor_path_stays_mounted() -> None:
+    """A tab left open across an upgrade still runs the old, unversioned card."""
+    init_text = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+    assert 'f"{FRONTEND_URL_BASE}/vendor",' in init_text, (
+        "the unversioned vendor mount must stay registered as a fallback for "
+        "dashboard tabs still running a card from before the versioned path"
+    )
+
+
 def test_hacs_json_is_valid() -> None:
     hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
     assert hacs["name"]

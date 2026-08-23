@@ -248,12 +248,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.http.register_view(MeteoSwissRadarCardView())
 
     frontend_dir = Path(__file__).parent / "frontend"
+    vendor_dir = str(frontend_dir / "vendor")
     await hass.http.async_register_static_paths(
         [
-            # Vendored assets are immutable per release and stay cached.
+            # Vendored assets are immutable per release and stay cached; the
+            # VERSION segment is what busts that cache on upgrade.
             StaticPathConfig(
                 f"{FRONTEND_URL_BASE}/vendor/{VERSION}",
-                str(frontend_dir / "vendor"),
+                vendor_dir,
+                cache_headers=True,
+            ),
+            # Unversioned fallback for cards from before the versioned path: a
+            # dashboard tab left open across an upgrade keeps running the old
+            # card, which asks for this URL the first time it needs Leaflet, and
+            # would otherwise show "Leaflet failed to load" until a page reload.
+            # It cannot shadow the versioned mount above -- aiohttp resolves the
+            # most explicit URL prefix first, not in registration order.
+            StaticPathConfig(
+                f"{FRONTEND_URL_BASE}/vendor",
+                vendor_dir,
                 cache_headers=True,
             ),
         ]
