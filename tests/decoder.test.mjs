@@ -169,3 +169,134 @@ describe("_reanchorIndex (manifest rollover re-anchoring)", () => {
     expect(card._reanchorIndex(3300)).toBe(11);
   });
 });
+
+describe("transient-failure recovery (issue #2)", () => {
+  // A bare instance plus stubbed side-effects: the recovery logic is pure
+  // state, so we replace the DOM/timer/network touchpoints and assert the
+  // decisions. No DOM, no real timers, no network.
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._frames = [{ url: "frame-0" }, { url: "frame-1" }];
+    card._frameIndex = 0;
+    // Side-effect stubs (would otherwise need DOM / RAF / timers).
+    card._showBanner = () => {};
+    card._hideBanner = () => {};
+    card._startRecoveryTimer = () => {
+      card._recoveryStarted = (card._recoveryStarted || 0) + 1;
+    };
+    card._stopRecoveryTimer = () => {
+      card._recoveryStopped = (card._recoveryStopped || 0) + 1;
+    };
+    card._started = [];
+    card._startPlay = (mode) => {
+      card._started.push(mode);
+      card._playing = true;
+      card._playMode = mode;
+    };
+    return card;
+  }
+
+  describe("per-frame retry backoff", () => {
+    it("does not refetch the same failed frame on the next tick", async () => {
+      const card = makeCard();
+      let calls = 0;
+      card._api = () => {
+        calls += 1;
+        return Promise.reject(new Error("network down"));
+      };
+      await card._ensureFrame("frame-0").catch(() => {});
+      // A second immediate request is inside the backoff window -> gated.
+      await card._ensureFrame("frame-0").catch(() => {});
+      expect(calls).toBe(1);
+      expect(card._retryAfter.has("frame-0")).toBe(true);
+    });
+
+    it("retries once the backoff window has elapsed", async () => {
+      const card = makeCard();
+      let calls = 0;
+      card._api = () => {
+        calls += 1;
+        return Promise.reject(new Error("network down"));
+      };
+      await card._ensureFrame("frame-0").catch(() => {});
+      // Simulate the backoff having expired.
+      card._retryAfter.set("frame-0", Date.now() - 1);
+      await card._ensureFrame("frame-0").catch(() => {});
+      expect(calls).toBe(2);
+    });
+
+    it("gating a frame does not inflate the fail streak", async () => {
+      const card = makeCard();
+      card._api = () => Promise.reject(new Error("network down"));
+      await card._ensureFrame("frame-0").catch(() => {});
+      const streakAfterReal = card._failStreak;
+      // Several gated ticks must not push the streak toward the limit.
+      for (let i = 0; i < 5; i++) await card._ensureFrame("frame-0").catch(() => {});
+      expect(card._failStreak).toBe(streakAfterReal);
+    });
+
+    it("clears the backoff on a successful fetch", async () => {
+      const card = makeCard();
+      card._api = () => Promise.resolve({ coords: GRID, areas: [] });
+      // A stale (expired) backoff entry from an earlier failure: the fetch
+      // proceeds and success must drop the entry.
+      card._retryAfter.set("frame-0", Date.now() - 1);
+      await card._ensureFrame("frame-0");
+      expect(card._retryAfter.has("frame-0")).toBe(false);
+    });
+  });
+
+  describe("remember-and-resume the paused mode", () => {
+    it("remembers the active mode when the fail streak pauses playback", () => {
+      const card = makeCard();
+      card._playing = true;
+      card._playMode = "window";
+      card._beginFailurePause();
+      expect(card._pausedByFailure).toBe("window");
+      expect(card._playing).toBe(false);
+      expect(card._playMode).toBe("paused");
+      expect(card._recoveryStarted).toBe(1);
+    });
+
+    it("resumes the remembered mode on the first successful fetch", () => {
+      const card = makeCard();
+      card._playing = true;
+      card._playMode = "full";
+      card._beginFailurePause();
+      card._maybeResumeAfterFailure();
+      expect(card._started).toEqual(["full"]);
+      expect(card._pausedByFailure).toBe(null);
+      expect(card._recoveryStopped).toBe(1);
+    });
+
+    it("does not remember or resume when nothing was playing", () => {
+      const card = makeCard();
+      card._playing = false;
+      card._playMode = "paused";
+      card._beginFailurePause();
+      expect(card._pausedByFailure).toBe(null);
+      card._maybeResumeAfterFailure();
+      expect(card._started).toEqual([]);
+    });
+
+    it("never auto-resumes after the user takes manual control", () => {
+      const card = makeCard();
+      card._playing = true;
+      card._playMode = "window";
+      card._beginFailurePause();
+      // User taps play / scrubs -> manual control.
+      card._clearFailureRecovery();
+      card._maybeResumeAfterFailure();
+      expect(card._started).toEqual([]);
+      expect(card._pausedByFailure).toBe(null);
+    });
+
+    it("does not restart a loop that is already playing", () => {
+      const card = makeCard();
+      card._pausedByFailure = "window";
+      card._playing = true;
+      card._maybeResumeAfterFailure();
+      expect(card._started).toEqual([]);
+    });
+  });
+});

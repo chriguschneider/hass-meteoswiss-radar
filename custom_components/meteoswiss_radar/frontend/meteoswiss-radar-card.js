@@ -17,6 +17,8 @@ const PATH_CACHE_SIZE = 130; // projected Path2D sets per view (LRU)
 const PREFETCH_AHEAD = 6; // frames fetched ahead of the playhead
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
 const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
+const FRAME_RETRY_BACKOFF_MS = 8000; // don't refetch a failed frame every tick
+const RECOVERY_INTERVAL_MS = 15000; // probe cadence while failure-paused
 const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
 
@@ -216,6 +218,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     super();
     this._cache = new Map(); // radar_url -> decoded areas
     this._pending = new Map(); // radar_url -> Promise
+    this._retryAfter = new Map(); // radar_url -> earliest retry timestamp (ms)
     this._frames = [];
     this._frameIndex = 0;
     this._playing = false;
@@ -223,6 +226,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._failStreak = 0;
     this._dataReady = false;
     this._lastManifest404Refresh = 0;
+    // Play mode remembered when a fail-streak paused playback, so recovery can
+    // restart the same loop. null unless a network outage paused us.
+    this._pausedByFailure = null;
   }
 
   setConfig(config) {
@@ -258,6 +264,7 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   disconnectedCallback() {
     this._pause();
+    this._stopRecoveryTimer();
     if (this._refreshTimer) {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
@@ -635,6 +642,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       }
     }
     if (this._playMode === "window") this._computeWindow();
+    // A successful manifest refresh means the network is back: resume the mode
+    // an earlier outage paused (no-op otherwise).
+    this._maybeResumeAfterFailure();
   }
 
   /* past_hours / forecast_hours config: trim the timeline around the most
@@ -820,28 +830,48 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (cached) return Promise.resolve(cached);
     const pending = this._pending.get(url);
     if (pending) return pending;
+    // Back off a recently failed frame: the playback loop asks for the same
+    // url every ~300 ms, so without this a router reboot would burn the whole
+    // fail streak in ~2 s and hammer the network. Hold the current frame and
+    // let the next real attempt wait out FRAME_RETRY_BACKOFF_MS.
+    const until = this._retryAfter.get(url);
+    if (until != null && Date.now() < until) {
+      return Promise.reject(new Error("frame retry backoff"));
+    }
     const p = this._api(url)
       .then((frame) => {
         const areas = decodeFrame(frame);
         this._pending.delete(url);
+        this._retryAfter.delete(url);
         this._cachePut(url, areas);
         this._failStreak = 0;
         if (this._dataReady) this._hideBanner();
+        // Network is back: resume the mode the outage paused, if any.
+        this._maybeResumeAfterFailure();
         return areas;
       })
       .catch((err) => {
         this._pending.delete(url);
+        this._retryAfter.set(url, Date.now() + FRAME_RETRY_BACKOFF_MS);
+        this._pruneRetryAfter();
         this._failStreak += 1;
         // A vanished frame usually means the manifest rolled over upstream.
         if (this._is404(err)) this._refreshAfter404();
-        if (this._failStreak >= FAIL_STREAK_LIMIT) {
-          if (this._playing) this._pause();
-          this._showBanner("Radar frames unavailable — retrying");
-        }
+        if (this._failStreak >= FAIL_STREAK_LIMIT) this._beginFailurePause();
         throw err;
       });
     this._pending.set(url, p);
     return p;
+  }
+
+  // Keep _retryAfter from growing without bound over a long-running card:
+  // frames roll off the manifest, so drop entries whose backoff has expired.
+  _pruneRetryAfter() {
+    if (this._retryAfter.size <= CACHE_SIZE) return;
+    const now = Date.now();
+    for (const [u, t] of this._retryAfter) {
+      if (t <= now) this._retryAfter.delete(u);
+    }
   }
 
   _is404(err) {
@@ -858,11 +888,65 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._refreshManifest(true).catch(() => {});
   }
 
+  /* ---------- failure recovery ---------- */
+
+  // Fail streak crossed the limit. Pause, but remember the active loop so a
+  // later successful fetch or manifest refresh can restart it (defect: an
+  // autoplay wall tablet used to stay frozen forever after a short outage).
+  _beginFailurePause() {
+    if (this._playing && (this._playMode === "window" || this._playMode === "full")) {
+      this._pausedByFailure = this._playMode;
+      this._pause();
+      this._startRecoveryTimer();
+    }
+    this._showBanner("Radar frames unavailable — retrying");
+  }
+
+  // Called from both recovery signals the issue names: a first successful
+  // frame fetch (_ensureFrame) and a successful manifest refresh. No-op unless
+  // an outage paused us and the user has not since taken manual control.
+  _maybeResumeAfterFailure() {
+    const mode = this._pausedByFailure;
+    if (!mode || this._playing) return;
+    this._pausedByFailure = null;
+    this._stopRecoveryTimer();
+    this._hideBanner();
+    this._startPlay(mode);
+  }
+
+  // User took manual control (play button or scrub): never auto-resume a
+  // stale mode on top of their choice.
+  _clearFailureRecovery() {
+    this._pausedByFailure = null;
+    this._stopRecoveryTimer();
+  }
+
+  // While failure-paused the RAF loop is gone and the manifest timer only
+  // fires every 5 min, so probe on a shorter cadence. A live probe reaching
+  // the network resumes via _maybeResumeAfterFailure and stops this timer.
+  _startRecoveryTimer() {
+    if (this._recoveryTimer) return;
+    this._recoveryTimer = setInterval(() => {
+      this._refreshManifest(true).catch(() => {});
+      const f = this._frames[this._frameIndex];
+      if (f) this._ensureFrame(f.url).catch(() => {});
+    }, RECOVERY_INTERVAL_MS);
+  }
+
+  _stopRecoveryTimer() {
+    if (this._recoveryTimer) {
+      clearInterval(this._recoveryTimer);
+      this._recoveryTimer = null;
+    }
+  }
+
   /* ---------- playback ---------- */
 
   /* The play button cycles: paused -> window (the configured relevant
    * range around now, looping) -> full timeline -> paused. */
   _togglePlay() {
+    // Manual control overrides any pending failure auto-resume.
+    this._clearFailureRecovery();
     if (this._playMode === "window") this._startPlay("full");
     else if (this._playMode === "full") this._pause();
     else this._startPlay("window");
@@ -972,6 +1056,8 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   _onScrub(idx) {
+    // Scrubbing is a manual pause; never auto-resume over it.
+    this._clearFailureRecovery();
     this._pause();
     this._scrubTarget = idx;
     const f = this._frames[idx];
