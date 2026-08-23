@@ -19,6 +19,7 @@ const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // manifest re-check cadence
 const FAIL_STREAK_LIMIT = 8; // consecutive frame failures before degrading
 const FRAME_RETRY_BACKOFF_MS = 8000; // don't refetch a failed frame every tick
 const RECOVERY_INTERVAL_MS = 15000; // probe cadence while failure-paused
+const TEARDOWN_DEBOUNCE_MS = 2000; // grace before a detached card frees its map
 const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
 
@@ -232,6 +233,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   setConfig(config) {
+    const prev = this._config;
     this._config = {
       height: 400,
       zoom: 8,
@@ -249,6 +251,43 @@ class MeteoSwissRadarCard extends HTMLElement {
     if ((config || {}).autoplay === true && !(config || {}).autoplay_mode) {
       this._config.autoplay_mode = "full"; // legacy autoplay: true
     }
+    // Editor preview: HA re-runs setConfig on the live element for every
+    // keystroke. Apply display-only changes in place so the preview updates
+    // without recreating the element (which re-ran Leaflet + a full data load
+    // and leaked the predecessor). Only a changed time span reloads data.
+    if (this._initialized) this._applyConfigInPlace(prev || {});
+  }
+
+  // Apply the config deltas that do not need a full re-init: map height,
+  // legend/attribution/time-axis visibility, label size, and — the one data
+  // change — a different past/forecast span. Frame-independent DOM only.
+  _applyConfigInPlace(prev) {
+    const c = this._config;
+    if (Number(c.height) !== Number(prev.height)) {
+      this._applyHeight();
+      if (this._map) this._map.invalidateSize();
+    }
+    if (this._legendEl) this._legendEl.hidden = c.legend === false;
+    if (this._attrib) this._attrib.hidden = c.attribution === false;
+    const timeAxis = c.time_axis !== false;
+    if (this._hoursRow) this._hoursRow.hidden = !timeAxis;
+    if (this._datesRow) this._datesRow.hidden = !timeAxis;
+    // Labels are only built when time_axis is on; rebuild when it is switched
+    // back on so the (previously skipped) rows are populated.
+    if (timeAxis && prev.time_axis === false) this._buildTimelineLabels();
+    if (c.large_label !== prev.large_label) this._updateLabel();
+    // Only a changed time span needs new frames. Compare as strings so an
+    // absent bound on both sides reads as unchanged (Number(undefined) is NaN,
+    // and NaN !== NaN would spuriously trigger a reload on every keystroke).
+    const span = (cfg) => `${cfg.past_hours}|${cfg.forecast_hours}`;
+    if (this._dataReady && span(c) !== span(prev)) {
+      this._refreshManifest(true).catch(() => {});
+    }
+  }
+
+  _applyHeight() {
+    const h = Number(this._config.height) || 400;
+    this.style.setProperty("--msr-map-height", h + "px");
   }
 
   set hass(hass) {
@@ -257,7 +296,13 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   connectedCallback() {
-    this._maybeInit();
+    // Re-attached inside the debounce window: cancel the pending teardown and
+    // keep the live map rather than rebuilding it.
+    if (this._teardownTimer) {
+      clearTimeout(this._teardownTimer);
+      this._teardownTimer = null;
+    }
+    this._maybeInit(); // rebuilds from scratch if a teardown already fired
     if (this._map) requestAnimationFrame(() => this._map.invalidateSize());
     if (this._initialized && !this._refreshTimer) this._startRefreshTimer();
   }
@@ -269,6 +314,41 @@ class MeteoSwissRadarCard extends HTMLElement {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
     }
+    // HA detaches and immediately re-attaches cards during layout shuffles
+    // (view switches, drag reorder). Tearing the map down on every detach
+    // would rebuild Leaflet and refetch on each one; debounce so only a real
+    // removal — still detached after the grace period — frees the map.
+    if (this._teardownTimer) clearTimeout(this._teardownTimer);
+    this._teardownTimer = setTimeout(() => this._teardown(), TEARDOWN_DEBOUNCE_MS);
+  }
+
+  // Free everything a detached card would otherwise pin. Leaflet's map keeps
+  // a window-level resize listener (trackResize) that holds the whole element
+  // — the ~25 MB decode cache and the layer's Path2D cache — past GC;
+  // map.remove() detaches those listeners and the tile layer. Reset the init
+  // flags so connectedCallback rebuilds cleanly on re-attach.
+  _teardown() {
+    this._teardownTimer = null;
+    if (!this._initialized) return;
+    this._pause();
+    this._stopRecoveryTimer();
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer);
+      this._refreshTimer = null;
+    }
+    if (this._map) {
+      this._map.remove();
+      this._map = null;
+    }
+    this._radar = null;
+    this._cache.clear();
+    this._pending.clear();
+    this._retryAfter.clear();
+    this._frames = [];
+    this._frameIndex = 0;
+    this._initialized = false;
+    this._dataReady = false;
+    this._autoplayStarted = false;
   }
 
   getCardSize() {
@@ -315,7 +395,9 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   _renderShell() {
-    const root = this.attachShadow({ mode: "open" });
+    // A torn-down card is rebuilt into its existing shadow root; attachShadow
+    // twice throws, so reuse it and let innerHTML replace the previous tree.
+    const root = this.shadowRoot || this.attachShadow({ mode: "open" });
     const c = this._config;
     const height = Number(c.height) || 400;
     root.innerHTML = `
@@ -324,7 +406,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         ha-card { overflow: hidden; }
         .wrap { position: relative; }
         #map {
-          height: ${height}px; width: 100%;
+          height: var(--msr-map-height, ${height}px); width: 100%;
           background: var(--card-background-color, #dddddd);
         }
         #label {
@@ -492,6 +574,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._legendEl = root.getElementById("legend");
     this._cellsEl = root.getElementById("cells");
     this._modeHint = root.getElementById("modehint");
+    this._attrib = root.getElementById("attrib");
     this._playBtn.addEventListener("click", () => this._togglePlay());
     const scrubFromEvent = (ev) => {
       const rect = this._trackWrap.getBoundingClientRect();

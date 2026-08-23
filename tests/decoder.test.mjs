@@ -170,6 +170,161 @@ describe("_reanchorIndex (manifest rollover re-anchoring)", () => {
   });
 });
 
+describe("teardown / rebuild lifecycle (issue #3)", () => {
+  it("_teardown frees the Leaflet map and resets init state", () => {
+    const card = new MeteoSwissRadarCard();
+    card._initialized = true;
+    card._dataReady = true;
+    card._autoplayStarted = true;
+    card._frames = [{ url: "a" }, { url: "b" }];
+    card._frameIndex = 3;
+    let removed = false;
+    card._map = {
+      remove() {
+        removed = true;
+      },
+    };
+    card._radar = {};
+    card._cache.set("a", 1);
+    card._pending.set("a", Promise.resolve());
+    card._retryAfter.set("a", 1);
+
+    card._teardown();
+
+    expect(removed).toBe(true); // Leaflet listeners/tile layer released
+    expect(card._map).toBe(null);
+    expect(card._radar).toBe(null);
+    expect(card._cache.size).toBe(0);
+    expect(card._pending.size).toBe(0);
+    expect(card._retryAfter.size).toBe(0);
+    expect(card._frames).toEqual([]);
+    expect(card._frameIndex).toBe(0);
+    expect(card._initialized).toBe(false); // connectedCallback can rebuild
+    expect(card._dataReady).toBe(false);
+    expect(card._autoplayStarted).toBe(false);
+  });
+
+  it("_teardown is a no-op when the card was never initialized", () => {
+    const card = new MeteoSwissRadarCard();
+    let removed = false;
+    card._map = {
+      remove() {
+        removed = true;
+      },
+    };
+    card._teardown();
+    expect(removed).toBe(false);
+    expect(card._map).not.toBe(null);
+  });
+
+  it("disconnectedCallback debounces teardown; re-attach cancels it", () => {
+    const card = new MeteoSwissRadarCard();
+    card._initialized = true;
+    card._startRefreshTimer = () => {
+      card._refreshStarted = true;
+    };
+
+    card.disconnectedCallback();
+    expect(card._teardownTimer).toBeTruthy(); // teardown is scheduled, not run
+    expect(card._initialized).toBe(true);
+
+    // Re-attach within the grace window. _map is null so the invalidateSize
+    // path (requestAnimationFrame) is skipped in this stubbed realm.
+    card._map = null;
+    card.connectedCallback();
+    expect(card._teardownTimer).toBe(null); // pending teardown cancelled
+    expect(card._initialized).toBe(true); // map kept, never torn down
+    expect(card._refreshStarted).toBe(true); // refresh timer restarted
+  });
+});
+
+describe("cheap in-place config application (issue #3)", () => {
+  function makeInitializedCard() {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({}); // seed defaults; not initialized yet -> no in-place
+    card._initialized = true;
+    card._dataReady = true;
+    card.style = {
+      props: {},
+      setProperty(k, v) {
+        this.props[k] = v;
+      },
+    };
+    card._map = {
+      invalidated: 0,
+      invalidateSize() {
+        this.invalidated++;
+      },
+    };
+    card._legendEl = { hidden: false };
+    card._attrib = { hidden: false };
+    card._hoursRow = { hidden: false };
+    card._datesRow = { hidden: false };
+    card._builtLabels = 0;
+    card._buildTimelineLabels = () => {
+      card._builtLabels++;
+    };
+    card._updatedLabel = 0;
+    card._updateLabel = () => {
+      card._updatedLabel++;
+    };
+    card._refreshed = 0;
+    card._refreshManifest = () => {
+      card._refreshed++;
+      return Promise.resolve();
+    };
+    return card;
+  }
+
+  it("applies a height change via a CSS custom property, no data reload", () => {
+    const card = makeInitializedCard();
+    card.setConfig({ height: 600 });
+    expect(card.style.props["--msr-map-height"]).toBe("600px");
+    expect(card._map.invalidated).toBe(1);
+    expect(card._refreshed).toBe(0);
+  });
+
+  it("toggles legend/attribution/time-axis visibility without a fetch", () => {
+    const card = makeInitializedCard();
+    card.setConfig({ legend: false, attribution: false, time_axis: false });
+    expect(card._legendEl.hidden).toBe(true);
+    expect(card._attrib.hidden).toBe(true);
+    expect(card._hoursRow.hidden).toBe(true);
+    expect(card._datesRow.hidden).toBe(true);
+    expect(card._refreshed).toBe(0);
+  });
+
+  it("rebuilds the time-axis labels when time_axis is switched back on", () => {
+    const card = makeInitializedCard();
+    card.setConfig({ time_axis: false });
+    expect(card._builtLabels).toBe(0);
+    card.setConfig({ time_axis: true });
+    expect(card._builtLabels).toBe(1);
+    expect(card._hoursRow.hidden).toBe(false);
+  });
+
+  it("re-renders the label when large_label changes", () => {
+    const card = makeInitializedCard();
+    card.setConfig({ large_label: false });
+    expect(card._updatedLabel).toBe(1);
+  });
+
+  it("reloads data only when the past/forecast span changes", () => {
+    const card = makeInitializedCard();
+    card.setConfig({ past_hours: 3 });
+    expect(card._refreshed).toBe(1);
+    card.setConfig({ past_hours: 3, forecast_hours: 5 });
+    expect(card._refreshed).toBe(2);
+  });
+
+  it("does not apply in place before the card is initialized", () => {
+    const card = new MeteoSwissRadarCard();
+    // No DOM refs exist yet; this must not throw and must not fetch.
+    expect(() => card.setConfig({ height: 600 })).not.toThrow();
+    expect(card._config.height).toBe(600);
+  });
+});
+
 describe("transient-failure recovery (issue #2)", () => {
   // A bare instance plus stubbed side-effects: the recovery logic is pure
   // state, so we replace the DOM/timer/network touchpoints and assert the
