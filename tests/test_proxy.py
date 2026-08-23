@@ -60,6 +60,7 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha_comp = ModuleType("homeassistant.components")
     ha_frontend = ModuleType("homeassistant.components.frontend")
     ha_frontend.add_extra_js_url = lambda *a, **kw: None  # type: ignore[attr-defined]
+    ha_frontend.remove_extra_js_url = lambda *a, **kw: None  # type: ignore[attr-defined]
     ha_http = ModuleType("homeassistant.components.http")
 
     class _HAView:
