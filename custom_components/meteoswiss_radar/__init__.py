@@ -30,6 +30,7 @@ from .const import (
     FRONTEND_URL_BASE,
     PROXY_URL,
     UPSTREAM_BASE,
+    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -251,7 +252,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         [
             # Vendored assets are immutable per release and stay cached.
             StaticPathConfig(
-                f"{FRONTEND_URL_BASE}/vendor",
+                f"{FRONTEND_URL_BASE}/vendor/{VERSION}",
                 str(frontend_dir / "vendor"),
                 cache_headers=True,
             ),
