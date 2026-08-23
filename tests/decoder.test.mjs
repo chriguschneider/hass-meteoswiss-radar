@@ -53,14 +53,14 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContour, decodeFrame, MeteoSwissRadarCard };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame } = loadDecoder();
+const { gridKmToLatLng, decodeFrame, MeteoSwissRadarCard } = loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
 const GRID = {
@@ -120,5 +120,52 @@ describe("decodeFrame", () => {
     // means the decode/projection math changed; regenerate deliberately
     // with `npm test -- -u` only after verifying against live data.
     expect(decodeFrame(frame)).toMatchSnapshot();
+  });
+});
+
+describe("_reanchorIndex (manifest rollover re-anchoring)", () => {
+  // The constructor touches no DOM, so a bare instance is enough to exercise
+  // the pure re-anchor decision against a synthetic frame list.
+  function makeCard(frames, playing) {
+    const card = new MeteoSwissRadarCard();
+    card._frames = frames;
+    card._playing = playing;
+    return card;
+  }
+
+  // 5-min measurement cadence at t=0,300,...,3000, then two forecast frames.
+  const frames = [];
+  for (let i = 0; i <= 10; i++) frames.push({ ts: i * 300, type: "measurement" });
+  frames.push({ ts: 3300, type: "forecast" }, { ts: 3600, type: "forecast" });
+  const lastMeasIdx = 10;
+
+  it("re-anchors a paused card to the nearest frame when the moment still exists", () => {
+    const card = makeCard(frames, false);
+    // A moment 3 frames back (ts 2100) is still on the timeline.
+    expect(card._reanchorIndex(2100)).toBe(7);
+  });
+
+  it("snaps a paused card to the last measurement when the moment scrolled off the past edge", () => {
+    const card = makeCard(frames, false);
+    // Paged for hours: the old moment is now older than frames[0].
+    expect(card._reanchorIndex(-6000)).toBe(lastMeasIdx);
+  });
+
+  it("snaps a paused card to the last measurement when the moment is past the forecast horizon", () => {
+    const card = makeCard(frames, false);
+    expect(card._reanchorIndex(9000)).toBe(lastMeasIdx);
+  });
+
+  it("tracks the nearest frame while playing even if the moment scrolled off", () => {
+    // Playing must not snap to last measurement: the advance loop resumes
+    // from wherever the playhead was, so we keep the nearest edge frame.
+    const card = makeCard(frames, true);
+    expect(card._reanchorIndex(-6000)).toBe(0);
+    expect(card._reanchorIndex(9000)).toBe(frames.length - 1);
+  });
+
+  it("keeps a paused card on a forecast moment that still exists (no jump)", () => {
+    const card = makeCard(frames, false);
+    expect(card._reanchorIndex(3300)).toBe(11);
   });
 });
