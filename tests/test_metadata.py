@@ -63,3 +63,8 @@ def test_hacs_json_is_valid() -> None:
     assert hacs["name"]
     # Minimum HA version must look like a real release string.
     assert re.fullmatch(r"\d{4}\.\d+\.\d+", hacs["homeassistant"])
+    # HACS renders the README as the store page.
+    assert hacs.get("render_readme") is True
+    # The declared minimum must match the newest HA API the code relies on:
+    # StaticPathConfig / async_register_static_paths landed in 2024.6.
+    assert hacs["homeassistant"] == "2024.6.0"
