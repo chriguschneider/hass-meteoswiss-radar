@@ -708,3 +708,46 @@ describe("Leaflet retry on transient failure (issue #6)", () => {
     expect(card._initialized).toBe(true);  // recovered without page reload
   });
 });
+
+describe("scrub pointercancel / lostpointercapture (issue #7)", () => {
+  // _renderShell wires the pointer handlers onto the track element.  We stub
+  // the shadow root minimally so we can control the EventTarget directly and
+  // dispatch cancel events without a real browser.
+  function makeCardWithTrackWrap() {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({});
+
+    // Node 22 exposes EventTarget / Event as globals — no DOM shim needed.
+    const trackWrap = new EventTarget();
+    trackWrap.setPointerCapture = () => {};
+    trackWrap.getBoundingClientRect = () => ({ left: 0, width: 100 });
+
+    const noop = { addEventListener() {}, hidden: false };
+    card.shadowRoot = {
+      set innerHTML(_html) {},
+      getElementById(id) { return id === "trackwrap" ? trackWrap : noop; },
+    };
+    card._renderShell();  // registers actual pointer listeners on trackWrap
+    return { card, trackWrap };
+  }
+
+  it("pointercancel resets _trackScrubbing so autoplay is not paused by subsequent hovers", () => {
+    const { card, trackWrap } = makeCardWithTrackWrap();
+
+    trackWrap.dispatchEvent(new Event("pointerdown"));
+    expect(card._trackScrubbing).toBe(true);
+
+    trackWrap.dispatchEvent(new Event("pointercancel"));
+    expect(card._trackScrubbing).toBe(false);
+  });
+
+  it("lostpointercapture resets _trackScrubbing so autoplay is not paused by subsequent hovers", () => {
+    const { card, trackWrap } = makeCardWithTrackWrap();
+
+    trackWrap.dispatchEvent(new Event("pointerdown"));
+    expect(card._trackScrubbing).toBe(true);
+
+    trackWrap.dispatchEvent(new Event("lostpointercapture"));
+    expect(card._trackScrubbing).toBe(false);
+  });
+});
