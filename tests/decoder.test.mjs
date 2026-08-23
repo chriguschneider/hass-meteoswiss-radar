@@ -1277,3 +1277,85 @@ describe("byte-bounded decode cache (issue #52)", () => {
     expect(card._cacheBytes).toBe(32);
   });
 });
+
+describe("resume autoplay on reconnect within teardown debounce (issue #9)", () => {
+  // Build a card that looks initialized and playing in the given mode.
+  // _startPlay and _startRefreshTimer are stubbed to avoid browser APIs
+  // (requestAnimationFrame / setInterval) absent in the vm context.
+  function makePlayingCard(mode) {
+    const card = new MeteoSwissRadarCard();
+    card._frames = [{ url: "f0" }, { url: "f1" }];
+    card._playing = true;
+    card._playMode = mode;
+    card._initialized = true;
+    card._dataReady = true;
+    const started = [];
+    card._startPlay = (m) => {
+      started.push(m);
+      card._playing = true;
+      card._playMode = m;
+    };
+    card._startRefreshTimer = () => {};
+    return { card, started };
+  }
+
+  it("records the active play mode into _playModeBeforeDetach on disconnect", () => {
+    const { card } = makePlayingCard("window");
+    card.disconnectedCallback();
+    expect(card._playModeBeforeDetach).toBe("window");
+  });
+
+  it("records 'full' mode correctly", () => {
+    const { card } = makePlayingCard("full");
+    card.disconnectedCallback();
+    expect(card._playModeBeforeDetach).toBe("full");
+  });
+
+  it("leaves _playModeBeforeDetach null when the card was manually paused before detach", () => {
+    const { card } = makePlayingCard("window");
+    card._playing = false;
+    card._playMode = "paused";
+    card.disconnectedCallback();
+    expect(card._playModeBeforeDetach).toBeNull();
+  });
+
+  it("resumes window play when re-attached within the debounce window", () => {
+    const { card, started } = makePlayingCard("window");
+    card.disconnectedCallback();
+    expect(card._playing).toBe(false);
+    expect(card._teardownTimer).toBeTruthy();
+
+    card.connectedCallback();
+
+    expect(started).toEqual(["window"]);
+    expect(card._playModeBeforeDetach).toBeNull();
+  });
+
+  it("resumes full play when re-attached within the debounce window", () => {
+    const { card, started } = makePlayingCard("full");
+    card.disconnectedCallback();
+    card.connectedCallback();
+    expect(started).toEqual(["full"]);
+  });
+
+  it("stays paused when a manually-paused card is re-attached within the debounce window", () => {
+    const { card, started } = makePlayingCard("window");
+    card._playing = false;
+    card._playMode = "paused";
+    card.disconnectedCallback();
+    card.connectedCallback();
+    expect(started).toEqual([]);
+    expect(card._playing).toBe(false);
+  });
+
+  it("_teardown clears _playModeBeforeDetach", () => {
+    const { card } = makePlayingCard("window");
+    card.disconnectedCallback();
+    expect(card._playModeBeforeDetach).toBe("window");
+
+    card._map = { remove() {} };
+    card._teardown();
+
+    expect(card._playModeBeforeDetach).toBeNull();
+  });
+});
