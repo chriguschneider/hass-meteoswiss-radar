@@ -18,7 +18,7 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientTimeout, web
 
-from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -203,11 +203,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         if status != 200 or body is None:
             return web.Response(status=status)
         # versions.json must stay fresh; everything else is version- or
-        # timestamp-pinned and therefore immutable.
+        # timestamp-pinned and therefore immutable. authenticated endpoint
+        # requires Cache-Control: private to prevent shared-cache exposure.
         cache = (
             "no-store"
             if tail.endswith("versions.json")
-            else "public, max-age=86400, immutable"
+            else "private, max-age=86400, immutable"
         )
         resp = web.Response(
             body=body,
@@ -231,9 +232,16 @@ class MeteoSwissRadarCardView(HomeAssistantView):
     name = "meteoswiss_radar:card"
     requires_auth = False
 
-    async def get(self, request: web.Request) -> web.FileResponse:
+    async def get(self, request: web.Request) -> web.FileResponse | web.Response:
+        card_path = Path(__file__).parent / "frontend" / CARD_FILENAME
+        if not card_path.is_file():
+            _LOGGER.warning(
+                "Card file not found at %s; ensure frontend/ directory exists",
+                card_path,
+            )
+            return web.Response(status=404)
         return web.FileResponse(
-            Path(__file__).parent / "frontend" / CARD_FILENAME,
+            card_path,
             headers={"Cache-Control": "no-cache"},
         )
 
@@ -242,7 +250,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Register proxy view, static frontend path and the card resource once."""
     if hass.data.get(DOMAIN):
         return True
-    hass.data[DOMAIN] = True
 
     hass.http.register_view(MeteoSwissRadarProxyView(hass))
     hass.http.register_view(MeteoSwissRadarCardView())
@@ -272,9 +279,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ]
     )
     add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
+    hass.data[DOMAIN] = True
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Routes cannot be unregistered from aiohttp; keep them until restart."""
+    """Remove card from dashboards; routes remain until restart."""
+    remove_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
     return True
