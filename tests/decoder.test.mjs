@@ -794,6 +794,209 @@ describe("dynamic cache sizing (issue #14)", () => {
   });
 });
 
+describe("hot-path optimisations (issue #15)", () => {
+  // Shared frame list with enough entries to build a window.
+  function makeFrames(n) {
+    return Array.from({ length: n }, (_, i) => ({
+      url: `frame-${i}`,
+      ts: i * 300,
+      type: "measurement",
+      day: "23.08.2026",
+      timepoint: `${String(Math.floor(i / 2)).padStart(2, "0")}:${i % 2 === 0 ? "00" : "30"}`,
+    }));
+  }
+
+  describe("_prefetch window-aware wrapping", () => {
+    function makeCard(frames) {
+      const card = new MeteoSwissRadarCard();
+      card._frames = frames;
+      card._config = { frame_stride: 1 };
+      card._fetched = [];
+      card._ensureFrame = (url) => { card._fetched.push(url); return Promise.resolve(); };
+      return card;
+    }
+
+    it("wraps within [winStart, winEnd] in window mode — does not warm out-of-window frames", () => {
+      const card = makeCard(makeFrames(20));
+      card._playMode = "window";
+      card._winStart = 5;
+      card._winEnd = 9; // window of 5 frames (indices 5-9)
+
+      card._prefetch(9); // at the window tail
+
+      // All 6 prefetch slots should wrap into the window.
+      for (const url of card._fetched) {
+        const idx = Number(url.split("-")[1]);
+        expect(idx).toBeGreaterThanOrEqual(5);
+        expect(idx).toBeLessThanOrEqual(9);
+      }
+      // The wrap-around frame (index 5) must have been queued.
+      expect(card._fetched).toContain("frame-5");
+    });
+
+    it("does not wrap into out-of-window frames near the end in window mode", () => {
+      const card = makeCard(makeFrames(20));
+      card._playMode = "window";
+      card._winStart = 5;
+      card._winEnd = 9;
+
+      card._prefetch(9);
+
+      // frame-10 through frame-19 are outside the window and must not be queued.
+      expect(card._fetched).not.toContain("frame-10");
+      expect(card._fetched).not.toContain("frame-11");
+    });
+
+    it("wraps over the full list in full mode", () => {
+      const card = makeCard(makeFrames(10));
+      card._playMode = "full";
+
+      card._prefetch(9); // at the end of the full list
+
+      // Should wrap to frame-0, frame-1, …
+      expect(card._fetched).toContain("frame-0");
+    });
+
+    it("wraps over the full list when paused (scrub context)", () => {
+      const card = makeCard(makeFrames(10));
+      card._playMode = "paused";
+
+      card._prefetch(9);
+
+      expect(card._fetched).toContain("frame-0");
+    });
+  });
+
+  describe("per-frame shortLabel precompute", () => {
+    it("shortLabel is set on each frame after _refreshManifest", async () => {
+      const card = new MeteoSwissRadarCard();
+      card._config = {};
+      const ts = 1753920000; // 2025-08-30 at some hour
+      const pics = [{
+        radar_url: "frame-0",
+        data_type: "measurement",
+        day: "23.08.2026",
+        timepoint: "10:00",
+        timestamp: ts,
+      }];
+      card._api = (path) => {
+        if (path.includes("versions.json")) return Promise.resolve({ "precipitation/animation": "v1" });
+        return Promise.resolve({ map_images: [{ pictures: pics }], legend: [] });
+      };
+      card._tMeas = { style: {} };
+      card._tFc = { style: {} };
+      card._tNow = { style: {}, hidden: false };
+      card._modeHint = { hidden: false };
+      card._renderLegend = () => {};
+      card._buildTimelineLabels = () => {};
+      card._computeWindow = () => {};
+      card._maybeResumeAfterFailure = () => {};
+
+      await card._refreshManifest(true);
+
+      const f = card._frames[0];
+      expect(typeof f.shortLabel).toBe("string");
+      // shortLabel = "Mon 23. · 10:00" or similar — check structure not exact weekday.
+      expect(f.shortLabel).toContain("23.");
+      expect(f.shortLabel).toContain("· 10:00");
+    });
+  });
+
+  describe("_updateLabel DOM reuse", () => {
+    // Minimal fake DOM element sufficient to exercise _updateLabel.
+    function fakeEl(extra) {
+      return { textContent: "", hidden: false, dataset: {}, ...extra };
+    }
+
+    function makeCardWithLabelDivs(config) {
+      const card = new MeteoSwissRadarCard();
+      card.setConfig(config || {});
+      card._label = {
+        hidden: false,
+        dataset: {},
+        classList: { _classes: new Set(), toggle(cls, force) { if (force) this._classes.add(cls); else this._classes.delete(cls); } },
+      };
+      card._labelL1 = fakeEl();
+      card._labelL2 = fakeEl();
+      return card;
+    }
+
+    const frame = {
+      ts: 1753920000,
+      type: "measurement",
+      day: "23.08.2026",
+      timepoint: "10:00",
+      shortLabel: "Sat 23. · 10:00",
+    };
+
+    it("sets l1.textContent from the precomputed shortLabel", () => {
+      const card = makeCardWithLabelDivs({ large_label: true });
+      card._frames = [frame];
+      card._frameIndex = 0;
+      card._updateLabel();
+      expect(card._labelL1.textContent).toBe("Sat 23. · 10:00");
+      expect(card._label.hidden).toBe(false);
+    });
+
+    it("shows l2 with the frame type in large mode", () => {
+      const card = makeCardWithLabelDivs({ large_label: true });
+      card._frames = [frame];
+      card._frameIndex = 0;
+      card._updateLabel();
+      expect(card._labelL2.hidden).toBe(false);
+      expect(card._labelL2.textContent).toBe("Measurement");
+    });
+
+    it("hides l2 in compact mode", () => {
+      const card = makeCardWithLabelDivs({ large_label: false });
+      card._frames = [frame];
+      card._frameIndex = 0;
+      card._updateLabel();
+      expect(card._labelL2.hidden).toBe(true);
+    });
+
+    it("adds .large class in large mode and removes it in compact mode", () => {
+      const card = makeCardWithLabelDivs({ large_label: true });
+      card._frames = [frame];
+      card._frameIndex = 0;
+      card._updateLabel();
+      expect(card._label.classList._classes.has("large")).toBe(true);
+
+      card.setConfig({ large_label: false });
+      card._updateLabel();
+      expect(card._label.classList._classes.has("large")).toBe(false);
+    });
+
+    it("skips l1 textContent assignment when text is unchanged", () => {
+      const card = makeCardWithLabelDivs({ large_label: true });
+      card._frames = [frame];
+      card._frameIndex = 0;
+      card._updateLabel(); // first call sets the text
+
+      let writeCount = 0;
+      const prev = card._labelL1.textContent;
+      Object.defineProperty(card._labelL1, "textContent", {
+        get: () => prev,
+        set: () => { writeCount++; },
+        configurable: true,
+      });
+
+      card._updateLabel(); // same frame — must not write again
+      expect(writeCount).toBe(0);
+    });
+
+    it("falls back to weekdayShort when shortLabel is absent", () => {
+      const card = makeCardWithLabelDivs({ large_label: false });
+      const frameNoLabel = { ts: 1753920000, type: "measurement", day: "23.08.2026", timepoint: "10:00" };
+      card._frames = [frameNoLabel];
+      card._frameIndex = 0;
+      card._updateLabel();
+      // Should not throw and l1 gets some text.
+      expect(card._labelL1.textContent.length).toBeGreaterThan(0);
+    });
+  });
+});
+
 describe("scrub pointercancel / lostpointercapture (issue #7)", () => {
   // _renderShell wires the pointer handlers onto the track element.  We stub
   // the shadow root minimally so we can control the EventTarget directly and
