@@ -58,6 +58,35 @@ def test_manifest_has_required_keys() -> None:
     assert manifest["domain"] == "meteoswiss_radar"
 
 
+def test_vendor_urls_contain_version() -> None:
+    """Vendor asset URLs must embed the version so a release bump busts the cache."""
+    card_text = (COMPONENT / "frontend" / "meteoswiss-radar-card.js").read_text(
+        encoding="utf-8"
+    )
+    # The card is vanilla JS with template literals; CARD_VERSION is a variable.
+    assert "/vendor/${CARD_VERSION}/leaflet.js" in card_text, (
+        "leaflet.js URL must include CARD_VERSION in the path"
+    )
+    assert "/vendor/${CARD_VERSION}/leaflet.css" in card_text, (
+        "leaflet.css URL must include CARD_VERSION in the path"
+    )
+
+    init_text = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+    # __init__.py uses a Python f-string with {VERSION}, not the literal value.
+    assert "/vendor/{VERSION}" in init_text, (
+        "__init__.py must mount vendor assets under a versioned path using VERSION"
+    )
+
+
+def test_unversioned_vendor_path_stays_mounted() -> None:
+    """A tab left open across an upgrade still runs the old, unversioned card."""
+    init_text = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+    assert 'f"{FRONTEND_URL_BASE}/vendor",' in init_text, (
+        "the unversioned vendor mount must stay registered as a fallback for "
+        "dashboard tabs still running a card from before the versioned path"
+    )
+
+
 def test_hacs_json_is_valid() -> None:
     hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
     assert hacs["name"]

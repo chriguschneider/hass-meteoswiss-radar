@@ -29,7 +29,7 @@ function loadLeaflet() {
   if (!leafletLoader) {
     leafletLoader = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `${FRONTEND_BASE}/vendor/leaflet.js`;
+      script.src = `${FRONTEND_BASE}/vendor/${CARD_VERSION}/leaflet.js`;
       script.onload = () => resolve(window.L);
       script.onerror = () => { leafletLoader = null; reject(new Error("Leaflet failed to load")); };
       document.head.appendChild(script);
@@ -403,7 +403,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     const c = this._config;
     const height = Number(c.height) || 400;
     root.innerHTML = `
-      <link rel="stylesheet" href="${FRONTEND_BASE}/vendor/leaflet.css">
+      <link rel="stylesheet" href="${FRONTEND_BASE}/vendor/${CARD_VERSION}/leaflet.css">
       <style>
         ha-card { overflow: hidden; }
         .wrap { position: relative; }
