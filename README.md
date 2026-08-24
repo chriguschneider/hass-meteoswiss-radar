@@ -113,6 +113,8 @@ Four optional layers can be enabled per card. Each adds a toggle button (top-lef
 
 Add `layer_<x>_on: true` alongside the corresponding `layer_<x>: true` to start the overlay visible instead of toggled off.
 
+**Snow and Sleet note:** precipitation-type predictions exist only for future (forecast) frames. The overlays are empty on all measurement frames — the map shows nothing while viewing recorded data, matching the app's own behavior.
+
 **Lightning note:** strike data exists only for past (measurement) frames. The lightning overlay is empty on all forecast frames and shows nothing during storm-free periods — this matches the app's own behavior.
 
 ## Attribution
