@@ -182,9 +182,12 @@ def smoke_test():
             return False, errors
 
         latest_forecast = forecast_pics[-1]
-        rate_url = latest_forecast.get("rate_url")
+        # The INCA rate forecast is the forecast picture's radar_url (points at
+        # .../inca/precipitation/rate/...); snow_url/snowrain_url/freezingrain_url
+        # are the type overlays. There is no separate rate_url field.
+        rate_url = latest_forecast.get("radar_url")
         if not rate_url:
-            errors.append("Latest forecast frame has no rate_url")
+            errors.append("Latest forecast frame has no radar_url")
             return False, errors
 
         print("\n=== Fetching forecast frame (INCA rate) ===")
