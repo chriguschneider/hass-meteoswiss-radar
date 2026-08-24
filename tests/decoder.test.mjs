@@ -85,7 +85,7 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef: window };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
@@ -2700,11 +2700,11 @@ describe("EDITOR_DEFAULTS for overlay layer config keys (issue #92)", () => {
     expect(EDITOR_DEFAULTS.layer_lightning).toBe(false);
   });
 
-  it("all four layer_<x>_on keys default to false (auto-off)", () => {
-    expect(EDITOR_DEFAULTS.layer_snow_on).toBe(false);
-    expect(EDITOR_DEFAULTS.layer_snowrain_on).toBe(false);
-    expect(EDITOR_DEFAULTS.layer_freezing_rain_on).toBe(false);
-    expect(EDITOR_DEFAULTS.layer_lightning_on).toBe(false);
+  it("legacy layer_<x>_on keys are gone from EDITOR_DEFAULTS (issue #131)", () => {
+    expect(EDITOR_DEFAULTS).not.toHaveProperty("layer_snow_on");
+    expect(EDITOR_DEFAULTS).not.toHaveProperty("layer_snowrain_on");
+    expect(EDITOR_DEFAULTS).not.toHaveProperty("layer_freezing_rain_on");
+    expect(EDITOR_DEFAULTS).not.toHaveProperty("layer_lightning_on");
   });
 
   it("layer keys are stripped from emitted config when at their default (false)", () => {
@@ -2850,21 +2850,107 @@ describe("_refreshManifest stores overlay URLs on forecast frames (issue #92)", 
   });
 });
 
-describe("overlay toggle state (_overlayActive) (issue #92)", () => {
-  it("_overlayActive.snow defaults to false when layer_snow_on is absent", () => {
+describe("config-only layer switching (issue #131)", () => {
+  it("_showLightningForFrame draws strikes whenever layer and data exist (no toggle gate)", () => {
     const card = new MeteoSwissRadarCard();
-    card.setConfig({ layer_snow: true });
-    // _overlayActive is populated in _createMap; before that it is an empty object.
-    // After setConfig, overlay state is not yet set (no map created). Verify the
-    // constructor default is an empty object.
-    expect(Object.keys(card._overlayActive)).toHaveLength(0);
+    const calls = [];
+    card._lightningLayer = { setStrikes: (s) => calls.push(s) };
+    card._lightningMap = new Map([[600, [[46.5, 7.5]]]]);
+    card._frames = [
+      { ts: 600, type: "measurement" },
+      { ts: 900, type: "measurement" },
+    ];
+    card._showLightningForFrame(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual([[46.5, 7.5]]);
   });
 
-  it("setConfig merges layer_snow_on: true into the config object", () => {
+  it("_refreshManifest fetches a new lightning version even when the animation version is unchanged", async () => {
     const card = new MeteoSwissRadarCard();
-    card.setConfig({ layer_snow: true, layer_snow_on: true });
-    expect(card._config.layer_snow).toBe(true);
-    expect(card._config.layer_snow_on).toBe(true);
+    card._config = { layer_lightning: true };
+    card._animVersion = "a1";
+    card._lightningVersion = "l1";
+    const requested = [];
+    card._api = (path) => {
+      requested.push(path);
+      if (path.includes("versions.json")) {
+        return Promise.resolve({ "precipitation/animation": "a1", lightning: "l2" });
+      }
+      return Promise.resolve({});
+    };
+    await card._refreshManifest(false);
+    expect(
+      requested.some((p) => p.includes("lightning/version__l2/lightning.json"))
+    ).toBe(true);
+    // The animation early-return still applies: no manifest fetch happened.
+    expect(requested.some((p) => p.includes("animation.json"))).toBe(false);
+  });
+
+  it("_applyLayerConfigInPlace creates and removes overlay layers on a live map", () => {
+    const { MeteoSwissRadarCard: Card, windowRef } = loadDecoder();
+    const card = new Card();
+    const mapLayers = new Set();
+    card._map = {
+      addLayer: (l) => mapLayers.add(l),
+      removeLayer: (l) => mapLayers.delete(l),
+    };
+    card._frames = [];
+    // Minimal Leaflet stub: extend() must yield a constructor whose instances
+    // register themselves on the map via addTo (real onAdd needs map panes).
+    windowRef.L = {
+      Layer: {
+        extend(def) {
+          function C() { if (def.initialize) def.initialize.call(this); }
+          C.prototype = Object.create(def);
+          C.prototype.addTo = function (m) { m.addLayer(this); return this; };
+          return C;
+        },
+      },
+    };
+    try {
+      card._applyLayerConfigInPlace({ layer_snow: true });
+      expect(card._overlayLayers.snow).toBeTruthy();
+      expect(mapLayers.has(card._overlayLayers.snow)).toBe(true);
+      card._applyLayerConfigInPlace({});
+      expect(card._overlayLayers.snow).toBeUndefined();
+      expect(mapLayers.size).toBe(0);
+    } finally {
+      windowRef.L = undefined;
+    }
+  });
+
+  it("_applyLayerConfigInPlace adds and removes the lightning layer with its data", () => {
+    const { MeteoSwissRadarCard: Card, windowRef } = loadDecoder();
+    const card = new Card();
+    const mapLayers = new Set();
+    card._map = {
+      addLayer: (l) => mapLayers.add(l),
+      removeLayer: (l) => mapLayers.delete(l),
+    };
+    card._frames = [];
+    card._api = () => Promise.resolve({});
+    windowRef.L = {
+      Layer: {
+        extend(def) {
+          function C() { if (def.initialize) def.initialize.call(this); }
+          C.prototype = Object.create(def);
+          C.prototype.addTo = function (m) { m.addLayer(this); return this; };
+          return C;
+        },
+      },
+    };
+    try {
+      card._applyLayerConfigInPlace({ layer_lightning: true });
+      expect(card._lightningLayer).toBeTruthy();
+      expect(mapLayers.has(card._lightningLayer)).toBe(true);
+      card._applyLayerConfigInPlace({});
+      expect(card._lightningLayer).toBeNull();
+      expect(card._lightningMap).toBeNull();
+      expect(card._lightningVersion).toBeNull();
+      expect(mapLayers.size).toBe(0);
+    } finally {
+      windowRef.L = undefined;
+    }
   });
 });
 
@@ -2872,7 +2958,6 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
   function makeCardWithOverlayEl() {
     const card = new MeteoSwissRadarCard();
     card._overlayLayers = {};
-    card._overlayActive = {};
     card._legendEl = { hidden: false };
     const cells = [];
     card._overlaySwatch = {
@@ -2891,11 +2976,10 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
     expect(card._overlaySwatch.hidden).toBe(true);
   });
 
-  it("shows one swatch row per active overlay", () => {
+  it("shows one swatch row per enabled overlay", () => {
     const card = makeCardWithOverlayEl();
-    // Simulate snow and snowrain layers created and active.
+    // Simulate snow and snowrain layers created (enabled = shown, issue #131).
     card._overlayLayers = { snow: {}, snowrain: {} };
-    card._overlayActive = { snow: true, snowrain: true };
     const children = [];
     card._overlaySwatch = {
       hidden: true,
@@ -2908,11 +2992,9 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
     expect(children).toHaveLength(2);
   });
 
-  it("hides swatch rows for inactive overlays", () => {
+  it("shows a lightning swatch whenever the lightning layer exists", () => {
     const card = makeCardWithOverlayEl();
-    // Snow layer exists but is toggled off.
-    card._overlayLayers = { snow: {} };
-    card._overlayActive = { snow: false };
+    card._lightningLayer = {};
     const children = [];
     card._overlaySwatch = {
       hidden: true,
@@ -2921,8 +3003,8 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
       appendChild(el) { children.push(el); },
     };
     card._updateOverlayLegend();
-    expect(card._overlaySwatch.hidden).toBe(true);
-    expect(children).toHaveLength(0);
+    expect(card._overlaySwatch.hidden).toBe(false);
+    expect(children).toHaveLength(1);
   });
 
   it("suppresses swatches and never forces the legend visible when legend:false", () => {
@@ -2930,7 +3012,6 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
     // Active overlay, but the user has explicitly disabled the legend panel.
     card._config = { legend: false };
     card._overlayLayers = { snow: {} };
-    card._overlayActive = { snow: true };
     card._legendEl = { hidden: true };
     const children = [];
     card._overlaySwatch = {

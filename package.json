@@ -1,6 +1,6 @@
 {
   "name": "hass-meteoswiss-radar-card",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "Tests and syntax checks for the MeteoSwiss Radar Lovelace card.",

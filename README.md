@@ -102,16 +102,16 @@ play the configured window (looping) -> play the full timeline.
 
 ### Overlay layers
 
-Four optional layers can be enabled per card. Each adds a toggle button (top-left map corner) and a legend swatch.
+Four optional layers can be enabled per card. An enabled layer is always shown and adds a legend swatch; layers are switched in the card configuration (UI editor chips or YAML), not on the map.
 
-| Config key | Toggle label | What it shows |
+| Config key | Legend label | What it shows |
 | --- | --- | --- |
 | `layer_snow: true` | Snow | INCA snow-type contours |
 | `layer_snowrain: true` | Sleet | INCA sleet-type contours |
 | `layer_freezing_rain: true` | Freezing rain | INCA freezing-rain-type contours |
 | `layer_lightning: true` | Lightning | Strike points from the MeteoSwiss lightning product |
 
-Add `layer_<x>_on: true` alongside the corresponding `layer_<x>: true` to start the overlay visible instead of toggled off.
+The `layer_<x>_on` keys from v0.10.0 are obsolete and ignored (enabled now means visible).
 
 **Snow and Sleet note:** precipitation-type predictions exist only for future (forecast) frames. The overlays are empty on all measurement frames — the map shows nothing while viewing recorded data, matching the app's own behavior.
 
