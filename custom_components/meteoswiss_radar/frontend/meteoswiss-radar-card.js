@@ -1090,10 +1090,15 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _updateOverlayLegend() {
     if (!this._overlaySwatch) return;
+    // Respect an explicit legend:false — the swatches live inside the legend
+    // panel, so forcing it visible below would override the user's config.
+    const legendOff = this._config && this._config.legend === false;
     // Collect which overlays are currently active and have a layer.
-    const active = OVERLAY_ORDER.filter(
-      (key) => this._overlayLayers[key] && this._overlayActive[key]
-    );
+    const active = legendOff
+      ? []
+      : OVERLAY_ORDER.filter(
+          (key) => this._overlayLayers[key] && this._overlayActive[key]
+        );
     this._overlaySwatch.textContent = "";
     if (!active.length) {
       this._overlaySwatch.hidden = true;

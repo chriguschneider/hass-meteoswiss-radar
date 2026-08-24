@@ -2894,6 +2894,26 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
     expect(card._overlaySwatch.hidden).toBe(true);
     expect(children).toHaveLength(0);
   });
+
+  it("suppresses swatches and never forces the legend visible when legend:false", () => {
+    const card = makeCardWithOverlayEl();
+    // Active overlay, but the user has explicitly disabled the legend panel.
+    card._config = { legend: false };
+    card._overlayLayers = { snow: {} };
+    card._overlayActive = { snow: true };
+    card._legendEl = { hidden: true };
+    const children = [];
+    card._overlaySwatch = {
+      hidden: true,
+      textContent: "",
+      get children() { return children; },
+      appendChild(el) { children.push(el); },
+    };
+    card._updateOverlayLegend();
+    expect(card._overlaySwatch.hidden).toBe(true);
+    expect(children).toHaveLength(0);
+    expect(card._legendEl.hidden).toBe(true); // not forced back on
+  });
 });
 
 describe("_ensureOverlayFrame does not affect fail streak (issue #92)", () => {
