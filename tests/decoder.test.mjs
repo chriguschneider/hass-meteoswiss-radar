@@ -1852,3 +1852,281 @@ describe("_buildTimelineLabels across DST boundaries (issue #66)", () => {
     expect(seps).toEqual(expectedDaySeps(t0, t1, rowWidth));
   });
 });
+
+// --------------------------------------------------------------------------
+// Playback state machine: _advance / _togglePlay / _onScrub / _jumpTo (issue #76)
+// --------------------------------------------------------------------------
+describe("playback state machine (issue #76)", () => {
+  function makeFrames(n) {
+    return Array.from({ length: n }, (_, i) => ({
+      url: `frame-${i}`,
+      ts: i * 300,
+      type: "measurement",
+    }));
+  }
+
+  // A deferred promise so a test can resolve _ensureFrame at a chosen moment,
+  // reproducing a decode that finishes after the user has moved on.
+  function deferred() {
+    let resolve;
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  // Bare instance with the frame-drawing collaborators stubbed to record calls,
+  // matching the "bare-instance-plus-stubs" pattern used across this file. By
+  // default every frame is cached (_cacheGet truthy) so _advance takes the
+  // show-frame path; individual tests override _cacheGet to force the hold path.
+  function makeCard(frames, config = {}) {
+    const card = new MeteoSwissRadarCard();
+    card._frames = frames;
+    card._config = { frame_stride: 1, ...config };
+    card._shown = [];
+    card._ensured = [];
+    card._prefetched = [];
+    card._cacheGet = () => ({}); // truthy: frame is decoded and ready
+    card._ensureFrame = (url) => {
+      card._ensured.push(url);
+      return Promise.resolve();
+    };
+    card._showFrame = (idx) => card._shown.push(idx);
+    card._prefetch = (idx) => card._prefetched.push(idx);
+    card._moveMarkers = () => {};
+    return card;
+  }
+
+  describe("_advance", () => {
+    it("window mode: next beyond _winEnd wraps to _winStart", () => {
+      const card = makeCard(makeFrames(20));
+      card._playMode = "window";
+      card._winStart = 5;
+      card._winEnd = 9;
+      card._frameIndex = 9; // stride 1 → next = 10 > winEnd
+
+      card._advance();
+
+      expect(card._shown).toEqual([5]);
+      expect(card._prefetched).toEqual([5]);
+    });
+
+    it("window mode: a stride overshooting the window end still snaps to _winStart", () => {
+      const card = makeCard(makeFrames(20), { frame_stride: 3 });
+      card._playMode = "window";
+      card._winStart = 5;
+      card._winEnd = 9;
+      card._frameIndex = 8; // next = 11, well past winEnd 9
+
+      card._advance();
+
+      // The snap-back is the only guard against a stride overshooting the window.
+      expect(card._shown).toEqual([5]);
+    });
+
+    it("window mode: a step landing inside the window advances normally", () => {
+      const card = makeCard(makeFrames(20));
+      card._playMode = "window";
+      card._winStart = 5;
+      card._winEnd = 9;
+      card._frameIndex = 6; // next = 7, still inside the window
+
+      card._advance();
+
+      expect(card._shown).toEqual([7]);
+    });
+
+    it("full mode wraps modulo frames.length", () => {
+      const card = makeCard(makeFrames(10));
+      card._playMode = "full";
+      card._frameIndex = 9; // next = 10 → 10 % 10 = 0
+
+      card._advance();
+
+      expect(card._shown).toEqual([0]);
+      expect(card._prefetched).toEqual([0]);
+    });
+
+    it("full mode with stride wraps modulo frames.length", () => {
+      const card = makeCard(makeFrames(10), { frame_stride: 4 });
+      card._playMode = "full";
+      card._frameIndex = 8; // next = 12 → 12 % 10 = 2
+
+      card._advance();
+
+      expect(card._shown).toEqual([2]);
+    });
+
+    it("holds the current frame when the next frame is not yet decoded", () => {
+      const card = makeCard(makeFrames(10));
+      card._playMode = "full";
+      card._frameIndex = 3;
+      card._cacheGet = () => undefined; // next frame uncached
+
+      card._advance();
+
+      // Kicks off a decode but must not paint an undecoded frame.
+      expect(card._ensured).toEqual(["frame-4"]);
+      expect(card._shown).toEqual([]);
+      expect(card._prefetched).toEqual([]);
+    });
+
+    it("is a no-op with no frames", () => {
+      const card = makeCard([]);
+      card._playMode = "full";
+      card._frameIndex = 0;
+
+      card._advance();
+
+      expect(card._shown).toEqual([]);
+      expect(card._ensured).toEqual([]);
+    });
+  });
+
+  describe("_togglePlay", () => {
+    // Stub the heavy start/pause implementations (they touch RAF and the DOM)
+    // and only record the mode transitions the cycle drives.
+    function makeToggleCard() {
+      const card = makeCard(makeFrames(10));
+      card._playMode = "paused";
+      card._starts = [];
+      card._pauses = 0;
+      card._clears = 0;
+      card._startPlay = (mode) => {
+        card._starts.push(mode);
+        card._playMode = mode;
+      };
+      card._pause = () => {
+        card._pauses++;
+        card._playMode = "paused";
+      };
+      card._clearFailureRecovery = () => {
+        card._clears++;
+      };
+      return card;
+    }
+
+    it("cycles paused → window → full → paused", () => {
+      const card = makeToggleCard();
+
+      card._togglePlay();
+      expect(card._playMode).toBe("window");
+      card._togglePlay();
+      expect(card._playMode).toBe("full");
+      card._togglePlay();
+      expect(card._playMode).toBe("paused");
+
+      expect(card._starts).toEqual(["window", "full"]);
+      expect(card._pauses).toBe(1);
+    });
+
+    it("clears any pending failure auto-resume on every press", () => {
+      const card = makeToggleCard();
+
+      card._togglePlay();
+      card._togglePlay();
+      card._togglePlay();
+
+      // Manual control must override a pending failure recovery each time.
+      expect(card._clears).toBe(3);
+    });
+  });
+
+  describe("_onScrub race guard", () => {
+    // Wire up just enough for _onScrub's uncached branch: pause + clear are
+    // stubbed away, and _ensureFrame is a deferred we resolve on demand.
+    function makeScrubCard(d) {
+      const card = makeCard(makeFrames(10));
+      card._clearFailureRecovery = () => {};
+      card._pause = () => {
+        card._playing = false;
+        card._playMode = "paused";
+      };
+      card._cacheGet = () => undefined; // force the async decode path
+      card._ensureFrame = () => d.promise;
+      return card;
+    }
+
+    it("does not show a frame when a slow decode resolves after the user scrubbed elsewhere", async () => {
+      const d = deferred();
+      const card = makeScrubCard(d);
+
+      card._onScrub(3); // _scrubTarget = 3, decode pending
+      card._scrubTarget = 7; // user has since scrubbed to a different frame
+
+      d.resolve();
+      await d.promise;
+
+      expect(card._shown).toEqual([]);
+      expect(card._prefetched).toEqual([]);
+    });
+
+    it("shows the frame when the decode resolves and the scrub target is unchanged", async () => {
+      const d = deferred();
+      const card = makeScrubCard(d);
+
+      card._onScrub(3);
+
+      d.resolve();
+      await d.promise;
+
+      expect(card._shown).toEqual([3]);
+      expect(card._prefetched).toEqual([3]);
+    });
+
+    it("shows a cached frame synchronously without waiting on a decode", () => {
+      const card = makeCard(makeFrames(10));
+      card._clearFailureRecovery = () => {};
+      card._pause = () => {};
+      // _cacheGet is truthy by default → synchronous show path.
+
+      card._onScrub(4);
+
+      expect(card._shown).toEqual([4]);
+      expect(card._prefetched).toEqual([4]);
+    });
+  });
+
+  describe("_jumpTo stale guard", () => {
+    function makeJumpCard(d) {
+      const card = makeCard(makeFrames(10));
+      card._ensureFrame = () => d.promise;
+      return card;
+    }
+
+    it("does not show a frame when _frameIndex has moved on before the decode resolves", async () => {
+      const d = deferred();
+      const card = makeJumpCard(d);
+
+      card._jumpTo(3); // sets _frameIndex = 3, decode pending
+      card._frameIndex = 8; // a later jump moved the index before decode finished
+
+      d.resolve();
+      await d.promise;
+
+      expect(card._shown).toEqual([]);
+    });
+
+    it("shows the frame when _frameIndex still matches on resolve", async () => {
+      const d = deferred();
+      const card = makeJumpCard(d);
+
+      card._jumpTo(3);
+
+      d.resolve();
+      await d.promise;
+
+      expect(card._shown).toEqual([3]);
+    });
+
+    it("is a no-op for an out-of-range index", () => {
+      const d = deferred();
+      const card = makeJumpCard(d);
+
+      card._jumpTo(99);
+
+      expect(card._shown).toEqual([]);
+      expect(card._prefetched).toEqual([]);
+    });
+  });
+});
