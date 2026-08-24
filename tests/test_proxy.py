@@ -48,8 +48,25 @@ class _FakeResponse:
         return f"_FakeResponse(status={self.status})"
 
 
+class _FakeFileResponse:
+    """Stand-in for aiohttp.web.FileResponse."""
+
+    def __init__(self, path, *, headers: dict | None = None, **_kw) -> None:  # noqa: ANN001
+        self.path = path
+        self.status = 200
+        self._explicit_headers = headers or {}
+        self.compression_enabled = False
+
+    def enable_compression(self) -> None:
+        self.compression_enabled = True
+
+    def __repr__(self) -> str:
+        return f"_FakeFileResponse(path={self.path!r})"
+
+
 class _FakeWeb:
     Response = _FakeResponse
+    FileResponse = _FakeFileResponse
 
 
 def _make_stubs() -> dict[str, ModuleType]:
@@ -105,6 +122,7 @@ for _name, _mod in _STUBS.items():
 # Import after stubs are in place.
 from custom_components.meteoswiss_radar import (  # noqa: E402
     MeteoSwissRadarProxyView,
+    MeteoSwissRadarVendorView,
     _LRU_MAX,
     _MAX_BODY_BYTES,
     _VERSIONS_TTL,
@@ -600,8 +618,8 @@ def test_async_setup_entry_is_idempotent() -> None:
     _run(async_setup_entry(hass, entry))
     second_count = hass.http.register_view.call_count
 
-    assert first_count == 2, "expected two view registrations on first setup"
-    assert second_count == 2, "second setup must not register views again"
+    assert first_count == 3, "expected three view registrations on first setup"
+    assert second_count == 3, "second setup must not register views again"
 
 
 def test_reload_reregisters_card_resource(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -639,7 +657,7 @@ def test_reload_reregisters_card_resource(monkeypatch: pytest.MonkeyPatch) -> No
     ], "reload must re-register the card resource"
 
     # ...but must not re-register the (non-unregisterable) HTTP views.
-    assert hass.http.register_view.call_count == 2, (
+    assert hass.http.register_view.call_count == 3, (
         "views must be registered only once across a reload"
     )
 
@@ -660,6 +678,78 @@ def test_setup_does_not_duplicate_card_resource_without_unload() -> None:
         _run(async_setup_entry(hass, entry))
 
     assert added == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: vendor view — version-agnostic serving (issue #70)
+# ---------------------------------------------------------------------------
+
+def _get_vendor(tag: str, filename: str) -> _FakeResponse:
+    view = MeteoSwissRadarVendorView()
+    request = MagicMock()
+    return _run(view.get(request, tag, filename))
+
+
+@pytest.mark.parametrize("tag", ["0.7.0", "0.8.0", "0.9.0", "99.99.99", "anything"])
+def test_vendor_any_tag_resolves(tag: str) -> None:
+    """Every tag -- old, current, or future -- resolves the same on-disk file.
+
+    This is the fix for issue #70: a card left open across an upgrade (old tag)
+    and a new card on a not-yet-restarted process (new tag) both resolve.
+    """
+    resp = _get_vendor(tag, "leaflet.js")
+    assert resp.status == 200
+    assert str(resp.path).endswith("frontend/vendor/leaflet.js")
+
+
+@pytest.mark.parametrize(
+    "filename,expected_type",
+    [
+        ("leaflet.js", "text/javascript"),
+        ("leaflet.css", "text/css"),
+        ("images/marker-icon.png", "image/png"),
+        ("images/marker-shadow.png", "image/png"),
+    ],
+)
+def test_vendor_allowed_files_resolve_with_content_type(
+    filename: str, expected_type: str
+) -> None:
+    resp = _get_vendor("0.8.0", filename)
+    assert resp.status == 200
+    assert resp._explicit_headers.get("Content-Type") == expected_type
+
+
+def test_vendor_cache_control_is_private_immutable() -> None:
+    resp = _get_vendor("0.8.0", "leaflet.js")
+    assert resp.status == 200
+    assert (
+        resp._explicit_headers.get("Cache-Control")
+        == "private, max-age=86400, immutable"
+    )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        # Not on the allowlist.
+        "leaflet.js.bak",
+        "evil.js",
+        "leaflet.min.js",
+        "index.html",
+        "images/",
+        "images/logo.svg",
+        # Traversal attempts.
+        "../__init__.py",
+        "../../const.py",
+        "..%2f__init__.py",
+        "images/../../__init__.py",
+    ],
+)
+def test_vendor_disallowed_or_traversal_returns_404(filename: str) -> None:
+    """Anything off the allowlist -- including traversal -- must 404."""
+    resp = _get_vendor("0.8.0", filename)
+    assert resp.status == 404
+    assert not isinstance(resp, _FakeFileResponse)
 
 
 def test_config_flow_aborts_on_second_instance() -> None:

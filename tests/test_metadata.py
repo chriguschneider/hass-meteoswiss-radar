@@ -70,11 +70,13 @@ def test_manifest_has_required_keys() -> None:
 
 
 def test_vendor_urls_contain_version() -> None:
-    """Vendor asset URLs must embed the version so a release bump busts the cache."""
+    """Vendor asset URLs must embed the version as an opaque cache-buster tag."""
     card_text = (COMPONENT / "frontend" / "meteoswiss-radar-card.js").read_text(
         encoding="utf-8"
     )
     # The card is vanilla JS with template literals; CARD_VERSION is a variable.
+    # The version stays in the URL so a release bump still busts the browser
+    # cache -- but it is now only a tag, resolved version-agnostically (#70).
     assert "/vendor/${CARD_VERSION}/leaflet.js" in card_text, (
         "leaflet.js URL must include CARD_VERSION in the path"
     )
@@ -82,19 +84,26 @@ def test_vendor_urls_contain_version() -> None:
         "leaflet.css URL must include CARD_VERSION in the path"
     )
 
+
+def test_vendor_served_version_agnostically() -> None:
+    """Vendor assets must be served by a tag-agnostic view, not a versioned mount.
+
+    Regression test for issue #70: a static mount keyed on VERSION 404s for any
+    other tag (an old card after an upgrade, a new card before a restart), so
+    the serving path must be a HomeAssistantView whose URL captures an opaque
+    {tag} it never uses for filesystem resolution.
+    """
     init_text = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
-    # __init__.py uses a Python f-string with {VERSION}, not the literal value.
-    assert "/vendor/{VERSION}" in init_text, (
-        "__init__.py must mount vendor assets under a versioned path using VERSION"
+    # An f-string doubles the braces: /vendor/{{tag}}/{{filename:.+}}.
+    assert "/vendor/{{tag}}/{{filename" in init_text, (
+        "the vendor view URL must capture an opaque {tag} segment"
     )
-
-
-def test_unversioned_vendor_path_stays_mounted() -> None:
-    """A tab left open across an upgrade still runs the old, unversioned card."""
-    init_text = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
-    assert 'f"{FRONTEND_URL_BASE}/vendor",' in init_text, (
-        "the unversioned vendor mount must stay registered as a fallback for "
-        "dashboard tabs still running a card from before the versioned path"
+    # The old versioned/unversioned static mounts must be gone.
+    assert "/vendor/{VERSION}" not in init_text, (
+        "the version-keyed static vendor mount must be replaced by the view"
+    )
+    assert "async_register_static_paths" not in init_text, (
+        "vendor assets must be served by a view, not a static path mount"
     )
 
 
