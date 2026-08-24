@@ -47,7 +47,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Headless worker: allow git / gh / build tools. Safe: isolated
           # runner, draft PRs only, human merges.
-          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40 --dangerously-skip-permissions"
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 100 --dangerously-skip-permissions"
           prompt: |
             You are working, unattended, on GitHub issue
             #${{ github.event.issue.number || github.event.inputs.issue }}
