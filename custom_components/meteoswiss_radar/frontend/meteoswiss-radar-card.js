@@ -879,6 +879,7 @@ class MeteoSwissRadarCard extends HTMLElement {
           transition: opacity 0.15s;
         }
         #layertoggles .ltbtn.active { opacity: 1; }
+        #layertoggles .ltbtn.forecast-only:disabled { opacity: 0.4; cursor: not-allowed; }
         #layertoggles .ltbtn svg { display: block; }
         #overlay-swatches { margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); padding-top: 3px; }
         #overlay-swatches .cell { display: flex; align-items: center; gap: 5px; }
@@ -1056,6 +1057,12 @@ class MeteoSwissRadarCard extends HTMLElement {
       btn.title = OVERLAY_LABELS[key];
       btn.setAttribute("aria-label", OVERLAY_LABELS[key]);
       btn.setAttribute("data-layer", key);
+      // Forecast-only overlays (snow, snowrain) are disabled in measurement frames.
+      if ((key === "snow" || key === "snowrain") && this._frames[this._frameIndex]?.type === "measurement") {
+        btn.disabled = true;
+        btn.setAttribute("aria-disabled", "true");
+        btn.classList.add("forecast-only");
+      }
       // Coloured swatch SVG: filled when active, grey outline when inactive.
       btn.innerHTML = this._layerToggleSvg(key, this._overlayActive[key]);
       btn.addEventListener("click", () => this._toggleOverlay(key));
@@ -1879,6 +1886,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!f) return;
     this._frameIndex = idx;
     this._updateLabel();
+    this._updateForecastOnlyOverlays(f);
     const frac = this._span ? (f.ts - this._t0) / this._span : 0;
     const pct = (frac * 100).toFixed(2) + "%";
     this._tElapsed.style.width = pct;
@@ -1902,6 +1910,19 @@ class MeteoSwissRadarCard extends HTMLElement {
     }
     this._label.dataset.type = f.type;
     this._label.hidden = false;
+  }
+
+  _updateForecastOnlyOverlays(f) {
+    if (!this._layerTogglesEl) return;
+    const isMeasurement = f.type === "measurement";
+    for (const key of ["snow", "snowrain"]) {
+      const btn = this._layerTogglesEl.querySelector(`[data-layer="${key}"]`);
+      if (btn) {
+        btn.classList.toggle("forecast-only", isMeasurement);
+        btn.disabled = isMeasurement;
+        btn.setAttribute("aria-disabled", isMeasurement);
+      }
+    }
   }
 
   /* ---------- status UI ---------- */
