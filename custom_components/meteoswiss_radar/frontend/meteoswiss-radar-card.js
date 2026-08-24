@@ -12,13 +12,18 @@ const TILE_URL =
   "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg";
 const ATTRIBUTION = "Source: MeteoSwiss &middot; &copy; swisstopo";
 
-// Byte budget for the decoded-frame cache. The heaviest single frame is ~518 KB
-// decoded; a 291-frame live manifest is ~26 MB total, so 24 MB keeps ~270 frames
-// resident and lets only the heaviest forecast tail rotate under eviction.
+// Per-product byte budget for the shared decode cache (issue #139). The heaviest
+// single frame is ~518 KB decoded; a 291-frame rate manifest is ~26 MB, so
+// 24 MB keeps ~270 frames resident with only the heaviest tail rotating.
 // With the single-buffer layout (issue #53) frameBytes now accounts for the real
 // footprint; the Int32 ring-index overhead is negligible (~300 KB for 74 k rings).
-// Keeping at 24 MB: same frame count as before, true browser memory drops ~32 %.
+// The actual cap is _maxBytes() = DECODE_CACHE_BYTES * max(1, registeredProducts),
+// so each enabled overlay product (snow/snowrain/freezingrain) adds another slot.
 const DECODE_CACHE_BYTES = 24 * 1024 * 1024;
+// Per-product entry-count cap. Zero-byte overlay frames (empty season) have no
+// byte footprint so byte-only eviction never prunes their Map keys; versioned
+// URLs mint ~216 new keys every 10-min rollover without this guard (issue #139).
+const DECODE_CACHE_MAX_KEYS = 360;
 // Two window-mode loops (~24 frames each): cheap to rebuild (0.73 ms/frame),
 // and _reset() clears it on every pan/zoom anyway, so a large pool buys nothing.
 const PATH_CACHE_SIZE = 48; // projected Path2D sets per view (LRU), fixed cap
@@ -112,6 +117,20 @@ const SHARED_DECODE_CACHE = {
   _cache: new Map(),
   _cacheSizes: new Map(),
   _cacheBytes: 0,
+  _cards: 0,    // attached card reference count (issue #139)
+  _products: 0, // sum of active product counts across cards (issue #139)
+
+  // Byte budget scales with the number of registered product streams so overlay
+  // layers don't thrash the rate-frame working set (issue #139).
+  _maxBytes() {
+    return DECODE_CACHE_BYTES * Math.max(1, this._products);
+  },
+
+  // Key-count cap scales with product count; prevents zero-byte overlay URLs
+  // from accumulating without eviction pressure (issue #139).
+  _maxKeys() {
+    return DECODE_CACHE_MAX_KEYS * Math.max(1, this._products);
+  },
 
   get(url) {
     const v = this._cache.get(url);
@@ -132,11 +151,32 @@ const SHARED_DECODE_CACHE = {
     this._cache.set(url, areas);
     this._cacheSizes.set(url, bytes);
     this._cacheBytes += bytes;
-    while (this._cacheBytes > DECODE_CACHE_BYTES) {
+    while (
+      this._cache.size > 0 &&
+      (this._cacheBytes > this._maxBytes() || this._cache.size > this._maxKeys())
+    ) {
       const oldest = this._cache.keys().next().value;
       this._cacheBytes -= this._cacheSizes.get(oldest) || 0;
       this._cacheSizes.delete(oldest);
       this._cache.delete(oldest);
+    }
+  },
+
+  // Register a card with its product count (1 rate + n enabled overlays).
+  attach(products) {
+    this._cards++;
+    this._products += products;
+  },
+
+  // Deregister a card. When the last card detaches, release all decoded data
+  // so Float32Arrays are eligible for GC (issue #139).
+  detach(products) {
+    this._cards = Math.max(0, this._cards - 1);
+    this._products = Math.max(0, this._products - products);
+    if (this._cards === 0) {
+      this._cache.clear();
+      this._cacheSizes.clear();
+      this._cacheBytes = 0;
     }
   },
 };
@@ -494,6 +534,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._lightningMap = null;      // Map<ts, [[lat,lng]]> parsed from lightning.json
     this._lightningVersion = null;  // version string of the last successful fetch
     this._lightningLayer = null;    // LightningLayer canvas layer (or null if not enabled)
+    // Product count registered in SHARED_DECODE_CACHE (1 rate + n enabled overlays).
+    // Tracks the value passed to attach() so _teardown can pass the same to detach().
+    this._cacheProducts = 0;
   }
 
   setConfig(config) {
@@ -557,6 +600,16 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (timeAxis && prev.time_axis === false) this._buildTimelineLabels();
     if (c.large_label !== prev.large_label) this._updateLabel();
     this._applyLayerConfigInPlace(c);
+    // Re-register the product count if overlay layers were toggled so the cache
+    // byte/key budget stays accurate (issue #139).
+    if (this._cacheProducts > 0) {
+      const newProducts = this._countActiveProducts();
+      if (newProducts !== this._cacheProducts) {
+        SHARED_DECODE_CACHE.detach(this._cacheProducts);
+        SHARED_DECODE_CACHE.attach(newProducts);
+        this._cacheProducts = newProducts;
+      }
+    }
     // Only a changed time span needs new frames. Compare as strings so an
     // absent bound on both sides reads as unchanged (Number(undefined) is NaN,
     // and NaN !== NaN would spuriously trigger a reload on every keystroke).
@@ -660,9 +713,10 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   // Free everything a detached card would otherwise pin. Leaflet's map keeps
   // a window-level resize listener (trackResize) that holds the whole element
-  // — the ~25 MB decode cache and the layer's Path2D cache — past GC;
-  // map.remove() detaches those listeners and the tile layer. Reset the init
-  // flags so connectedCallback rebuilds cleanly on re-attach.
+  // and the layer's Path2D cache past GC; map.remove() detaches those listeners
+  // and the tile layer. Deregistering from SHARED_DECODE_CACHE lets the last card
+  // to leave release decoded Float32Arrays (issue #139). Reset init flags so
+  // connectedCallback rebuilds cleanly on re-attach.
   _teardown() {
     this._teardownTimer = null;
     if (!this._initialized) return;
@@ -697,6 +751,12 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._dataReady = false;
     this._autoplayStarted = false;
     this._playModeBeforeDetach = null;
+    // Deregister from the shared decode cache; clears all entries when last card
+    // tears down so decoded Float32Arrays are eligible for GC (issue #139).
+    if (this._cacheProducts > 0) {
+      SHARED_DECODE_CACHE.detach(this._cacheProducts);
+      this._cacheProducts = 0;
+    }
   }
 
   getCardSize() {
@@ -721,9 +781,24 @@ class MeteoSwissRadarCard extends HTMLElement {
     return Number.isFinite(v) && v >= 1 ? v : 1;
   }
 
+  // Count active decode-cache product streams: rate (always 1) plus one per
+  // enabled overlay. Used to size SHARED_DECODE_CACHE budget (issue #139).
+  _countActiveProducts() {
+    let n = 1; // rate is always fetched
+    for (const key of OVERLAY_ORDER) {
+      if (this._config && this._config[OVERLAY_CONFIG_KEY[key]]) n++;
+    }
+    return n;
+  }
+
   async _maybeInit() {
     if (this._initialized || !this._hass || !this.isConnected) return;
     this._initialized = true;
+    // Register this card in the shared decode cache so the byte/key budgets
+    // scale to the number of active product streams (issue #139).
+    const products = this._countActiveProducts();
+    SHARED_DECODE_CACHE.attach(products);
+    this._cacheProducts = products;
     const epoch = this._epoch;
     this._renderShell();
     // Start the manifest + first-frame fetch before awaiting Leaflet so both
@@ -748,6 +823,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       // Script load failed (e.g. flaky network). Reset so the next hass/
       // connectedCallback call retries rather than staying permanently broken.
       this._initialized = false;
+      SHARED_DECODE_CACHE.detach(this._cacheProducts);
+      this._cacheProducts = 0;
       this._showError(err.message || String(err));
       return;
     }
