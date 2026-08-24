@@ -101,6 +101,14 @@ function loadDecoder() {
 const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef } =
   loadDecoder();
 
+function resetSharedCache() {
+  SHARED_DECODE_CACHE._cache.clear();
+  SHARED_DECODE_CACHE._cacheSizes.clear();
+  SHARED_DECODE_CACHE._cacheBytes = 0;
+  SHARED_DECODE_CACHE._cards = 0;
+  SHARED_DECODE_CACHE._products = 0;
+}
+
 // Real Swiss radar composite grid (from FORMAT.md).
 const GRID = {
   system: "LV95",
@@ -509,11 +517,7 @@ describe("transient-failure recovery (issue #2)", () => {
 
 describe("first-frame failure recovery (issue #5)", () => {
   beforeEach(() => {
-    SHARED_DECODE_CACHE._cache.clear();
-    SHARED_DECODE_CACHE._cacheSizes.clear();
-    SHARED_DECODE_CACHE._cacheBytes = 0;
-    SHARED_DECODE_CACHE._cards = 0;
-    SHARED_DECODE_CACHE._products = 0;
+    resetSharedCache();
   });
 
   // A bare instance with _refreshManifest stubbed so _loadData can run end-to-end
@@ -805,11 +809,7 @@ describe("typed-array geometry storage (issue #14, #53)", () => {
 
 describe("dynamic cache sizing (issue #14)", () => {
   beforeEach(() => {
-    SHARED_DECODE_CACHE._cache.clear();
-    SHARED_DECODE_CACHE._cacheSizes.clear();
-    SHARED_DECODE_CACHE._cacheBytes = 0;
-    SHARED_DECODE_CACHE._cards = 0;
-    SHARED_DECODE_CACHE._products = 0;
+    resetSharedCache();
   });
 
   it("_cachePut with shared cache uses byte budget for eviction", () => {
@@ -1234,11 +1234,7 @@ describe("byte-bounded decode cache (issue #52)", () => {
   }
 
   beforeEach(() => {
-    SHARED_DECODE_CACHE._cache.clear();
-    SHARED_DECODE_CACHE._cacheSizes.clear();
-    SHARED_DECODE_CACHE._cacheBytes = 0;
-    SHARED_DECODE_CACHE._cards = 0;
-    SHARED_DECODE_CACHE._products = 0;
+    resetSharedCache();
   });
 
   it("frameBytes sums verts.byteLength and rings.byteLength for each area", () => {
