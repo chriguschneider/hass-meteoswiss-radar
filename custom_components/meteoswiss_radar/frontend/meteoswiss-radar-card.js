@@ -1129,8 +1129,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     // The shadow-DOM stylesheet may finish loading after map creation; without
     // a recalc the tiles render misaligned.
     const link = this.shadowRoot.querySelector("link");
-    link.addEventListener("load", () => this._map.invalidateSize());
-    requestAnimationFrame(() => this._map.invalidateSize());
+    link.addEventListener("load", () => { if (this._map) this._map.invalidateSize(); });
+    requestAnimationFrame(() => { if (this._map) this._map.invalidateSize(); });
   }
 
   /* ---------- data ---------- */

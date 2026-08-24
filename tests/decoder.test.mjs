@@ -2608,6 +2608,67 @@ describe("async-init teardown race (issue #68)", () => {
     expect(ensureFrameCalled).toBe(false);
     expect(card._refreshTimerStarted).toBe(false);
   });
+
+  it("stylesheet-load callback and rAF in _createMap do not throw when map is torn down (issue #140)", () => {
+    const card = makeCard();
+
+    // Track whether the callbacks threw.
+    let callbackThrewError = false;
+    let rafCallbackThrewError = false;
+
+    // _createMap will call link.addEventListener and requestAnimationFrame.
+    // Stub them to capture the callbacks.
+    let stylesheetLoadCallback = null;
+    const origShadowRoot = card.shadowRoot;
+    card.shadowRoot = {
+      ...origShadowRoot,
+      querySelector: (sel) => {
+        if (sel === "link") {
+          return {
+            addEventListener(event, handler) {
+              if (event === "load") {
+                stylesheetLoadCallback = handler;
+              }
+            },
+          };
+        }
+        return origShadowRoot.querySelector(sel);
+      },
+    };
+
+    // Capture the rAF callback.
+    let rafCallback = null;
+    const origRaf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (cb) => {
+      rafCallback = cb;
+    };
+
+    // Create the map (this sets up the callbacks).
+    card._createMap({});
+
+    // Simulate teardown: null out the map.
+    card._teardown();
+
+    // Now fire the callbacks that were scheduled. They should not throw
+    // because the card is guarded with if (this._map).
+    try {
+      if (stylesheetLoadCallback) stylesheetLoadCallback();
+    } catch (e) {
+      callbackThrewError = true;
+    }
+    try {
+      if (rafCallback) rafCallback();
+    } catch (e) {
+      rafCallbackThrewError = true;
+    }
+
+    // Restore original rAF.
+    globalThis.requestAnimationFrame = origRaf;
+
+    // Neither callback should have thrown.
+    expect(callbackThrewError).toBe(false);
+    expect(rafCallbackThrewError).toBe(false);
+  });
 });
 
 describe("_refreshManifest guard branches (issue #80)", () => {
