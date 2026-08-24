@@ -44,12 +44,31 @@ _ALLOWED_PATHS = (
     re.compile(
         r"product/output/inca/precipitation/rate/version__\d{8}_\d{4}/rate_\d{8}_\d{4}\.json"
     ),
+    # INCA precipitation type variants (issue #92). Three separate patterns keep
+    # directory/filename coupled: freezing-rain (hyphen) in the dir but freezingrain
+    # (no hyphen) in the filename is an upstream inconsistency – a single alternation
+    # would incorrectly allow cross-mismatched combos like freezing-rain/.../snowrain.
+    re.compile(
+        r"product/output/inca/precipitation/type/snow/version__\d{8}_\d{4}/snow_\d{8}_\d{4}\.json"
+    ),
+    re.compile(
+        r"product/output/inca/precipitation/type/snowrain/version__\d{8}_\d{4}/snowrain_\d{8}_\d{4}\.json"
+    ),
+    re.compile(
+        r"product/output/inca/precipitation/type/freezing-rain/version__\d{8}_\d{4}/freezingrain_\d{8}_\d{4}\.json"
+    ),
+    re.compile(
+        r"product/output/lightning/version__\d{8}_\d{4}/lightning\.json"
+    ),
 )
 
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
 _VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
-_LRU_MAX = 50  # max immutable-frame entries (~5 MB at typical frame size)
+# Up to 4 products per forecast frame (rate + snow + snowrain + freezing-rain)
+# compete for LRU entries; entry pressure is real even though byte pressure is
+# negligible at typical frame sizes (~24 KB each).
+_LRU_MAX = 200  # max immutable-frame entries
 
 
 class MeteoSwissRadarProxyView(HomeAssistantView):

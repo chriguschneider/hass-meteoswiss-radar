@@ -145,6 +145,23 @@ _INCA_TAIL = (
     "product/output/inca/precipitation/rate"
     "/version__20240101_1200/rate_20240101_1200.json"
 )
+# Overlay tails (issue #92)
+_SNOW_TAIL = (
+    "product/output/inca/precipitation/type/snow"
+    "/version__20240101_1200/snow_20240101_1200.json"
+)
+_SNOWRAIN_TAIL = (
+    "product/output/inca/precipitation/type/snowrain"
+    "/version__20240101_1200/snowrain_20240101_1200.json"
+)
+_FREEZINGRAIN_TAIL = (
+    "product/output/inca/precipitation/type/freezing-rain"
+    "/version__20240101_1200/freezingrain_20240101_1200.json"
+)
+_LIGHTNING_TAIL = (
+    "product/output/lightning"
+    "/version__20240101_1200/lightning.json"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +721,10 @@ def test_lru_does_not_cache_versions_json() -> None:
     _ANIMATION_TAIL,
     _RADAR_TAIL,
     _INCA_TAIL,
+    _SNOW_TAIL,
+    _SNOWRAIN_TAIL,
+    _FREEZINGRAIN_TAIL,
+    _LIGHTNING_TAIL,
 ])
 def test_allowed_path_reaches_upstream(tail: str) -> None:
     """Every allowed path form must contact upstream and return 200."""
@@ -744,6 +765,19 @@ def test_allowed_path_reaches_upstream(tail: str) -> None:
     # INCA path outside precipitation/rate
     "product/output/inca/wind/rate/version__20240101_1200/rate_20240101_1200.json",
     "product/output/inca/precipitation/other/version__20240101_1200/other_20240101_1200.json",
+    # Near-miss rejects for overlay type paths (issue #92)
+    # Unknown precipitation type
+    "product/output/inca/precipitation/type/hail/version__20240101_1200/hail_20240101_1200.json",
+    # Cross-mismatched directory vs. filename (freezing-rain dir with snowrain file)
+    "product/output/inca/precipitation/type/freezing-rain/version__20240101_1200/snowrain_20240101_1200.json",
+    # Cross-mismatched: snowrain dir with snow file
+    "product/output/inca/precipitation/type/snowrain/version__20240101_1200/snow_20240101_1200.json",
+    # Cross-mismatched: snow dir with freezingrain file
+    "product/output/inca/precipitation/type/snow/version__20240101_1200/freezingrain_20240101_1200.json",
+    # Lightning with extra sub-path (e.g. language segment not in the pattern)
+    "product/output/lightning/version__20240101_1200/de/lightning.json",
+    # Lightning with wrong filename
+    "product/output/lightning/version__20240101_1200/lightning_20240101_1200.json",
 ])
 def test_disallowed_path_returns_404_without_upstream(tail: str) -> None:
     """Blocked paths must return 404; upstream must never be contacted."""
@@ -767,7 +801,15 @@ def test_versions_json_cache_control_is_no_store() -> None:
     assert resp._explicit_headers.get("Cache-Control") == "no-store"
 
 
-@pytest.mark.parametrize("tail", [_ANIMATION_TAIL, _RADAR_TAIL, _INCA_TAIL])
+@pytest.mark.parametrize("tail", [
+    _ANIMATION_TAIL,
+    _RADAR_TAIL,
+    _INCA_TAIL,
+    _SNOW_TAIL,
+    _SNOWRAIN_TAIL,
+    _FREEZINGRAIN_TAIL,
+    _LIGHTNING_TAIL,
+])
 def test_immutable_path_cache_control_is_private(tail: str) -> None:
     """Immutable frames must use private (not public) max-age caching.
 
@@ -959,6 +1001,10 @@ def test_config_flow_aborts_on_second_instance() -> None:
     _ANIMATION_TAIL,
     _RADAR_TAIL,
     _INCA_TAIL,
+    _SNOW_TAIL,
+    _SNOWRAIN_TAIL,
+    _FREEZINGRAIN_TAIL,
+    _LIGHTNING_TAIL,
 ])
 def test_upstream_request_uses_correct_url_redirects_and_timeout(tail: str) -> None:
     """session.get must be called with the full upstream URL, allow_redirects=False,

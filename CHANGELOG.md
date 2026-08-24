@@ -27,6 +27,23 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 - Card: Leaflet load and the three-request data chain now run in parallel,
   cutting cold-start time on slow connections (#72)
 
+## [v0.9.0] — 2026-08-24
+
+### Added
+
+- Proxy: allowlist four new upstream paths for INCA precipitation-type
+  overlays (snow, sleet, freezing rain) and the lightning product (#92)
+- Card: infrastructure for precipitation-type overlay layers — manifest
+  parsing stores overlay URLs on forecast frames, `_ensureOverlayFrame`
+  fetches them best-effort (no fail-streak impact), `_showFrame` renders
+  active overlays, and `_prefetch` warms upcoming overlay frames (#92)
+- Card: vertical layer-toggle stack on the map (app parity); per-layer
+  `layer_snow`/`layer_snowrain`/`layer_freezing_rain`/`layer_lightning`
+  config keys (default `false` = button hidden) with optional
+  `layer_<x>_on: true` for wall tablets (#92)
+- Card: overlay legend swatches shown per active layer (#92)
+- Editor: new "Layers" section with chips for each overlay layer (#92)
+
 ## [0.8.0] — 2026-08-24
 
 ### Fixed
@@ -83,6 +100,7 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.8.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...HEAD
+[v0.9.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.8.0...v0.9.0
 [0.8.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.7.6...0.8.0
 [0.7.6]: https://github.com/chriguschneider/hass-meteoswiss-radar/releases/tag/0.7.6

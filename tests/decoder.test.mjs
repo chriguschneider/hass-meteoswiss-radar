@@ -34,6 +34,13 @@ function loadDecoder() {
       querySelector: () => null,
       readyState: "complete",
       addEventListener: noop,
+      // Minimal stub so methods that create DOM nodes don't throw in unit tests
+      // that don't rely on real DOM structure (e.g. _updateOverlayLegend).
+      createElement: () => ({
+        className: "", style: {}, textContent: "", hidden: false,
+        setAttribute: noop, rel: "", href: "",
+        appendChild() {},
+      }),
     },
     customElements: registry,
     HTMLElement: class {},
@@ -2648,5 +2655,267 @@ describe("_refreshManifest guard branches (issue #80)", () => {
     expect(card._jumpToCalls).toHaveLength(0);
     expect(card._moveMarkersCalls).toHaveLength(0);
     expect(card._frames).toHaveLength(2);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Layer overlay infrastructure (issue #92)
+// --------------------------------------------------------------------------
+
+describe("EDITOR_DEFAULTS for overlay layer config keys (issue #92)", () => {
+  it("all four layer_<x> keys default to false (hidden)", () => {
+    expect(EDITOR_DEFAULTS.layer_snow).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_snowrain).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_freezing_rain).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_lightning).toBe(false);
+  });
+
+  it("all four layer_<x>_on keys default to false (auto-off)", () => {
+    expect(EDITOR_DEFAULTS.layer_snow_on).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_snowrain_on).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_freezing_rain_on).toBe(false);
+    expect(EDITOR_DEFAULTS.layer_lightning_on).toBe(false);
+  });
+
+  it("layer keys are stripped from emitted config when at their default (false)", () => {
+    // The editor emits only non-default values; layer_snow: false is the default
+    // and must be stripped so user YAML stays clean.
+    const editor = new MeteoSwissRadarCardEditor();
+    editor._config = { type: "t" };
+    editor._updateForms = () => {};
+    editor._emitted = [];
+    editor.dispatchEvent = (ev) => {
+      editor._emitted.push(ev.detail.config);
+      return true;
+    };
+    // Emit with layer keys at default (false) — they should be stripped.
+    editor._emit({
+      type: "t",
+      ...EDITOR_DEFAULTS,
+      layer_snow: false,
+      layer_snowrain: false,
+    });
+    expect(editor._config.layer_snow).toBeUndefined();
+    expect(editor._config.layer_snowrain).toBeUndefined();
+  });
+
+  it("layer_snow: true survives _emit (non-default value)", () => {
+    const editor = new MeteoSwissRadarCardEditor();
+    editor._config = { type: "t" };
+    editor._updateForms = () => {};
+    editor._emitted = [];
+    editor.dispatchEvent = (ev) => {
+      editor._emitted.push(ev.detail.config);
+      return true;
+    };
+    editor._emit({ type: "t", ...EDITOR_DEFAULTS, layer_snow: true });
+    expect(editor._config.layer_snow).toBe(true);
+  });
+});
+
+describe("_refreshManifest stores overlay URLs on forecast frames (issue #92)", () => {
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._config = {};
+    card._frames = [];
+    card._tMeas = { style: {} };
+    card._tFc = { style: {} };
+    card._tNow = { style: {}, hidden: false };
+    card._modeHint = { hidden: false };
+    card._renderLegend = () => {};
+    card._buildTimelineLabels = () => {};
+    card._computeWindow = () => {};
+    card._maybeResumeAfterFailure = () => {};
+    return card;
+  }
+
+  it("stores overlay URLs on forecast frames with leading slash stripped", async () => {
+    const card = makeCard();
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v1" };
+      return {
+        map_images: [{
+          pictures: [
+            {
+              radar_url: "/product/output/inca/precipitation/rate/version__20260824_0603/rate_20260824_0600.json",
+              data_type: "forecast",
+              day: "24.08.2026",
+              timepoint: "06:00",
+              timestamp: 1000,
+              snow_url: "/product/output/inca/precipitation/type/snow/version__20260824_0603/snow_20260824_0600.json",
+              snowrain_url: "/product/output/inca/precipitation/type/snowrain/version__20260824_0603/snowrain_20260824_0600.json",
+              freezingrain_url: "/product/output/inca/precipitation/type/freezing-rain/version__20260824_0605/freezingrain_20260824_0600.json",
+            },
+          ],
+        }],
+        legend: [],
+      };
+    };
+    await card._refreshManifest(true);
+    const f = card._frames[0];
+    expect(f.type).toBe("forecast");
+    // Leading slash must be stripped (proxy expects no leading slash).
+    expect(f.snow_url).toBe("product/output/inca/precipitation/type/snow/version__20260824_0603/snow_20260824_0600.json");
+    expect(f.snowrain_url).toBe("product/output/inca/precipitation/type/snowrain/version__20260824_0603/snowrain_20260824_0600.json");
+    expect(f.freezingrain_url).toBe("product/output/inca/precipitation/type/freezing-rain/version__20260824_0605/freezingrain_20260824_0600.json");
+  });
+
+  it("does not attach overlay URLs to measurement frames", async () => {
+    const card = makeCard();
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v1" };
+      return {
+        map_images: [{
+          pictures: [
+            {
+              radar_url: "product/output/radar/rzc/radar_rzc.20260824_0600.json",
+              data_type: "measurement",
+              day: "24.08.2026",
+              timepoint: "06:00",
+              timestamp: 1000,
+              // Measurement frames carry no overlay URLs in the live API;
+              // the card must not store undefined/null for them.
+            },
+          ],
+        }],
+        legend: [],
+      };
+    };
+    await card._refreshManifest(true);
+    const f = card._frames[0];
+    expect(f.type).toBe("measurement");
+    expect(f.snow_url).toBeUndefined();
+    expect(f.snowrain_url).toBeUndefined();
+    expect(f.freezingrain_url).toBeUndefined();
+  });
+
+  it("per-product version pinning: snow and freezingrain may have different versions", async () => {
+    const card = makeCard();
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v1" };
+      return {
+        map_images: [{
+          pictures: [{
+            radar_url: "rate.json",
+            data_type: "forecast",
+            day: "24.08.2026",
+            timepoint: "06:00",
+            timestamp: 1000,
+            snow_url: "/type/snow/version__20260824_0603/snow.json",
+            snowrain_url: "/type/snowrain/version__20260824_0603/snowrain.json",
+            freezingrain_url: "/type/freezing-rain/version__20260824_0605/freezingrain.json",
+          }],
+        }],
+        legend: [],
+      };
+    };
+    await card._refreshManifest(true);
+    const f = card._frames[0];
+    // Different version strings per product — stored verbatim from the manifest.
+    expect(f.snow_url).toContain("0603");
+    expect(f.freezingrain_url).toContain("0605");
+  });
+});
+
+describe("overlay toggle state (_overlayActive) (issue #92)", () => {
+  it("_overlayActive.snow defaults to false when layer_snow_on is absent", () => {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({ layer_snow: true });
+    // _overlayActive is populated in _createMap; before that it is an empty object.
+    // After setConfig, overlay state is not yet set (no map created). Verify the
+    // constructor default is an empty object.
+    expect(Object.keys(card._overlayActive)).toHaveLength(0);
+  });
+
+  it("setConfig merges layer_snow_on: true into the config object", () => {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({ layer_snow: true, layer_snow_on: true });
+    expect(card._config.layer_snow).toBe(true);
+    expect(card._config.layer_snow_on).toBe(true);
+  });
+});
+
+describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
+  function makeCardWithOverlayEl() {
+    const card = new MeteoSwissRadarCard();
+    card._overlayLayers = {};
+    card._overlayActive = {};
+    card._legendEl = { hidden: false };
+    const cells = [];
+    card._overlaySwatch = {
+      hidden: true,
+      textContent: "",
+      get children() { return cells; },
+      appendChild(el) { cells.push(el); },
+    };
+    return card;
+  }
+
+  it("hides the swatch div when no overlay is active", () => {
+    const card = makeCardWithOverlayEl();
+    // No layers in _overlayLayers → nothing active.
+    card._updateOverlayLegend();
+    expect(card._overlaySwatch.hidden).toBe(true);
+  });
+
+  it("shows one swatch row per active overlay", () => {
+    const card = makeCardWithOverlayEl();
+    // Simulate snow and snowrain layers created and active.
+    card._overlayLayers = { snow: {}, snowrain: {} };
+    card._overlayActive = { snow: true, snowrain: true };
+    const children = [];
+    card._overlaySwatch = {
+      hidden: true,
+      textContent: "",
+      get children() { return children; },
+      appendChild(el) { children.push(el); },
+    };
+    card._updateOverlayLegend();
+    expect(card._overlaySwatch.hidden).toBe(false);
+    expect(children).toHaveLength(2);
+  });
+
+  it("hides swatch rows for inactive overlays", () => {
+    const card = makeCardWithOverlayEl();
+    // Snow layer exists but is toggled off.
+    card._overlayLayers = { snow: {} };
+    card._overlayActive = { snow: false };
+    const children = [];
+    card._overlaySwatch = {
+      hidden: true,
+      textContent: "",
+      get children() { return children; },
+      appendChild(el) { children.push(el); },
+    };
+    card._updateOverlayLegend();
+    expect(card._overlaySwatch.hidden).toBe(true);
+    expect(children).toHaveLength(0);
+  });
+});
+
+describe("_ensureOverlayFrame does not affect fail streak (issue #92)", () => {
+  it("does not increment _failStreak on overlay fetch failure", async () => {
+    const card = new MeteoSwissRadarCard();
+    card._api = () => Promise.reject(new Error("overlay 502"));
+    const before = card._failStreak;
+    await card._ensureOverlayFrame("some/overlay.json").catch(() => {});
+    expect(card._failStreak).toBe(before);
+  });
+
+  it("does not set _retryAfter on overlay fetch failure", async () => {
+    const card = new MeteoSwissRadarCard();
+    card._api = () => Promise.reject(new Error("overlay 502"));
+    await card._ensureOverlayFrame("some/overlay.json").catch(() => {});
+    expect(card._retryAfter.has("some/overlay.json")).toBe(false);
+  });
+
+  it("stores decoded areas in the shared cache on success", async () => {
+    const card = new MeteoSwissRadarCard();
+    card._api = () => Promise.resolve({ coords: GRID, areas: [] });
+    await card._ensureOverlayFrame("overlay.json");
+    expect(card._cacheGet("overlay.json")).toBeDefined();
   });
 });

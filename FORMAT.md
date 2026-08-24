@@ -20,18 +20,38 @@ the integration's proxy). All paths below are mirrored 1:1 behind
 - Measurement frames:
   `product/output/radar/rzc/radar_rzc.<YYYYMMDD_HHMM>.json`
   (5-min steps, ~12 h back, ~100 KB each).
-- Forecast frames (INCA):
+- Forecast frames (INCA rate):
   `product/output/inca/precipitation/rate/version__<v>/rate_<YYYYMMDD_HHMM>.json`
-  (10-min steps, ~28 h ahead, ~24 KB each). Snow / sleet / freezing-rain
-  variants exist under `product/output/inca/precipitation/type/...`
-  (out of scope for now).
+  (10-min steps, ~28 h ahead, ~24 KB each).
+- Forecast frames (INCA precipitation-type overlays, issue #92):
+  - Snow: `product/output/inca/precipitation/type/snow/version__<v_snow>/snow_<YYYYMMDD_HHMM>.json`
+  - Sleet: `product/output/inca/precipitation/type/snowrain/version__<v_snowrain>/snowrain_<YYYYMMDD_HHMM>.json`
+  - Freezing rain: `product/output/inca/precipitation/type/freezing-rain/version__<v_fr>/freezingrain_<YYYYMMDD_HHMM>.json`
+
+  All 216 forecast frames carry `snow_url`, `snowrain_url`, and `freezingrain_url`
+  in `animation.json`; measurement frames do not.
+
+  **Per-product version pinning**: each product's URL carries its own version
+  string, and within one manifest different products can reference different
+  versions (observed: snow/snowrain at `version__20260824_0603`, freezing-rain at
+  `0605`). The card must use the manifest URLs verbatim; never construct overlay
+  URLs from a single version string.
+
+  All type-overlay frames share the chain-code decoder and frame format described
+  below.
+
+- Lightning: `product/output/lightning/version__<v>/lightning.json`
+  (see individual layer issues for format details; uses the same chain-code decoder).
 
 ## animation.json
 
 - `map_images[0].pictures[]`: ~295 frames, each
   `{ data_type: "measurement"|"forecast", data_type_string, radar_url, day
   ("DD.MM.YYYY"), timepoint ("HH:MM"), timestamp (unix s) }`; forecast frames
-  additionally carry `snowrain_url`, `snow_url`, `freezingrain_url`.
+  additionally carry `snow_url`, `snowrain_url`, `freezingrain_url` (absolute
+  paths, e.g. `/product/output/inca/precipitation/type/snow/…`). Each overlay
+  URL may reference a different version than the other overlays in the same frame
+  — use the manifest URLs verbatim.
 - `legend[]`: 9 bands `{ min, max?, color }` in mm/h, e.g.
   `{min:0, max:1, color:"#9A7E95"}` … `{min:60, color:"#AF00DD"}`.
   Display only — frames carry their own colors (see below).
