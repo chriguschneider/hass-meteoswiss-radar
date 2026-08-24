@@ -41,7 +41,7 @@ the integration's proxy). All paths below are mirrored 1:1 behind
   below.
 
 - Lightning: `product/output/lightning/version__<v>/lightning.json`
-  (see individual layer issues for format details; uses the same chain-code decoder).
+  (see [Lightning](#lightning) section below).
 
 ## animation.json
 
@@ -108,6 +108,27 @@ The app's own decoder lives in a webpack chunk, e.g.
 `https://www.meteoschweiz.admin.ch/static/5364.8a528267.js` (function `p` for
 vertices, `f` for GeoJSON assembly). The chunk hash changes with releases —
 re-find it by grepping the page's chunks for `charCodeAt`.
+
+## Lightning
+
+```json
+{
+  "1787544300": [["46.9892", "5.9804"], ["47.0047", "6.0043"]],
+  "1787543400": [["46.9728", "5.8963"]],
+  "1787541900": [["46.9563", "5.8083"], ["46.9266", "5.8317"]]
+}
+```
+
+- **Flat dict format**: keys are unix-second timestamps (numbers stored as strings in JSON),
+  values are arrays of `["lat", "lng"]` string pairs representing individual lightning strikes.
+- **5-minute bucket keys**: timestamps are aligned to 5-minute intervals. Only buckets with
+  strikes are present in the response.
+- **Multi-frame persistence**: a bucket remains in responses for several minutes after its first
+  publication, allowing the card to match strikes to their corresponding radar frames using
+  `strikesForFrame()`: filter strikes where `ts` falls in the half-open window
+  `[frameTs, frameTs + duration)`, where `duration = nextFrameTs - frameTs` (or 300 s for the
+  last frame).
+- **Coordinate coercion**: string coordinates are coerced to numbers (`Number(lat)`, `Number(lng)`).
 
 ## Basemap
 
