@@ -66,10 +66,11 @@ _ALLOWED_PATHS = (
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
 _VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
-# Byte-bounded LRU mirroring the card's DECODE_CACHE_BYTES pattern: ~20 MB keeps
-# one full manifest (~291 frames) resident. Entry-bounded LRU thrashed on full
-# playback as ~291 frames pushed through a 50-entry cache evicted everything
-# (issue #71); byte-bounded avoids this while staying within memory budget.
+# Byte-bounded LRU that accounts gzipped bytes only: the 20 MB budget now holds
+# ~7× more entries than the previous raw+gz double-counting, keeping a full
+# manifest (~291 frames) and any active overlay layers resident without thrash
+# (issue #71). Essentially every HA frontend client sends Accept-Encoding: gzip,
+# so the raw copy that was stored in the old tuple scheme was almost never served.
 _LRU_MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -85,14 +86,11 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         # TTL cache for versions.json: (monotonic_time, body) or None.
         self._versions_cache: tuple[float, bytes] | None = None
         # LRU for immutable frames (animation manifest + radar/inca frames).
-        # Each entry stores (raw_body, gzipped_body) to compress once at
-        # cache-put and serve pre-compressed when Accept-Encoding allows (#74).
-        self._lru: collections.OrderedDict[
-            str, tuple[bytes, bytes]
-        ] = collections.OrderedDict()
-        # LRU byte tracking: total bytes (raw + gzipped) and per-entry sizes.
+        # Stores gzipped bytes only; raw body is recovered via gzip.decompress()
+        # for the rare non-gzip client. Compress once at cache-put (#74).
+        self._lru: collections.OrderedDict[str, bytes] = collections.OrderedDict()
+        # Total gzipped bytes currently held in the LRU.
         self._lru_bytes = 0
-        self._lru_sizes: dict[str, int] = {}
         # In-flight tasks: tail → Task[(int, bytes|None)] deduplicates
         # concurrent requests for the same URL into one upstream fetch.
         # A Task (not a raw Future) lets the fetch survive leader cancellation
@@ -130,7 +128,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
     # Cache
     # ------------------------------------------------------------------
 
-    def _cache_get(self, tail: str) -> tuple[bytes, bytes] | bytes | None:
+    def _cache_get(self, tail: str) -> bytes | None:
         if tail.endswith("versions.json"):
             if self._versions_cache is not None:
                 ts, body = self._versions_cache
@@ -142,30 +140,24 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             return self._lru[tail]
         return None
 
-    def _cache_put(self, tail: str, data: bytes | tuple[bytes, bytes]) -> None:
+    def _cache_put(self, tail: str, data: bytes) -> None:
         if tail.endswith("versions.json"):
             # versions.json uses the TTL cache; store raw bytes only.
-            self._versions_cache = (time.monotonic(), data)  # type: ignore[arg-type]
+            self._versions_cache = (time.monotonic(), data)
         else:
-            # LRU entries require a pre-compressed (raw, gzipped) tuple — compression
-            # is done off the event loop in _fetch_and_cache before this call (#135).
-            raw_body, gzipped_body = data  # type: ignore[misc]
+            # LRU entries store gzipped bytes only (#136). Compression is done
+            # off the event loop in _fetch_and_cache before this call (#135).
             # Remove and re-account an existing entry being overwritten.
             if tail in self._lru:
-                self._lru_bytes -= self._lru_sizes.get(tail, 0)
-                self._lru_sizes.pop(tail, None)
-                self._lru.pop(tail, None)
-            entry = (raw_body, gzipped_body)
-            self._lru[tail] = entry
-            # Track total bytes for both raw and gzipped versions.
-            entry_bytes = len(raw_body) + len(gzipped_body)
-            self._lru_sizes[tail] = entry_bytes
-            self._lru_bytes += entry_bytes
+                self._lru_bytes -= len(self._lru[tail])
+                del self._lru[tail]
+            self._lru[tail] = data
+            self._lru_bytes += len(data)
             self._lru.move_to_end(tail)
             # Evict LRU while byte budget is exceeded.
             while self._lru_bytes > _LRU_MAX_BYTES:
-                oldest_tail, _oldest_entry = self._lru.popitem(last=False)
-                self._lru_bytes -= self._lru_sizes.pop(oldest_tail, 0)
+                _, oldest_gz = self._lru.popitem(last=False)
+                self._lru_bytes -= len(oldest_gz)
 
     # ------------------------------------------------------------------
     # Upstream fetch
@@ -227,16 +219,16 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
 
     async def _fetch_and_cache(
         self, tail: str
-    ) -> tuple[int, tuple[bytes, bytes] | bytes | None]:
+    ) -> tuple[int, bytes | None]:
         """Fetch *tail*, cache on 200, and return the result.
 
         Runs as a detached task so the result is available to joiners even
         when the leader's request handler is cancelled (issue #69).
 
-        For LRU entries the returned value is the pre-compressed (raw, gzipped)
-        tuple so both the leader and any joiners serve the pre-compressed copy
-        without triggering enable_compression() and without a double-compress
-        on the miss/joiner paths (issue #135).
+        For LRU entries the returned value is the pre-compressed gzipped bytes
+        so both the leader and any joiners serve the pre-compressed copy without
+        triggering enable_compression() and without a double-compress on the
+        miss/joiner paths (issues #135, #136).
         """
         status, body = await self._fetch(tail)
         if status == 200 and body is not None:
@@ -250,9 +242,8 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             gzipped = await self._hass.async_add_executor_job(
                 gzip.compress, body, 6
             )
-            entry: tuple[bytes, bytes] = (body, gzipped)
-            self._cache_put(tail, entry)
-            return (status, entry)
+            self._cache_put(tail, gzipped)
+            return (status, gzipped)
         return (status, body)
 
     # ------------------------------------------------------------------
@@ -263,7 +254,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         self,
         tail: str,
         status: int,
-        body: bytes | tuple[bytes, bytes] | None,
+        body: bytes | None,
         request: web.Request,
     ) -> web.Response:
         if status != 200 or body is None:
@@ -276,22 +267,21 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             if tail.endswith("versions.json")
             else "private, max-age=86400, immutable"
         )
-        # For LRU entries, body is (raw, gzipped); check Accept-Encoding to
-        # serve pre-compressed without per-hit recompression (issue #74).
         headers: dict[str, str] = {"Cache-Control": cache}
         response_body: bytes
-        if isinstance(body, tuple):
-            raw_body, gzipped_body = body
-            # If client accepts gzip, serve pre-compressed body directly.
+        if tail.endswith("versions.json"):
+            # Raw bytes; let aiohttp negotiate compression via enable_compression().
+            response_body = body
+        else:
+            # LRU body is always gzipped; serve it directly when the client
+            # accepts gzip (issue #74), otherwise decompress for the rare client
+            # that does not (issue #136).
             accept_encoding = request.headers.get("Accept-Encoding", "")
             if "gzip" in accept_encoding:
-                response_body = gzipped_body
+                response_body = body
                 headers["Content-Encoding"] = "gzip"
             else:
-                response_body = raw_body
-        else:
-            # versions.json is not tuple; serve as-is without recompression.
-            response_body = body
+                response_body = gzip.decompress(body)
 
         resp = web.Response(
             body=response_body,
@@ -299,10 +289,8 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             charset="utf-8",
             headers=headers,
         )
-        # Only enable compression for non-LRU responses (versions.json) or when
-        # we didn't already serve pre-gzipped content.
-        accept_encoding = request.headers.get("Accept-Encoding", "")
-        if not isinstance(body, tuple) or "gzip" not in accept_encoding:
+        # Enable compression only when we haven't already applied Content-Encoding.
+        if "Content-Encoding" not in headers:
             resp.enable_compression()
         return resp
 

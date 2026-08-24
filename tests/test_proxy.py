@@ -458,16 +458,18 @@ def test_cache_hit_with_gzip_serves_precompressed_body() -> None:
     )
 
 
-def test_cache_hit_without_gzip_serves_raw_body() -> None:
-    """Cache hit without gzip accept-encoding serves raw body with compression.
+def test_cache_hit_without_gzip_serves_decompressed_body() -> None:
+    """Cache hit without gzip accept-encoding gets decompressed body.
 
-    Clients that don't accept gzip still get the raw body with enable_compression.
+    LRU stores only gzipped bytes; gzip.decompress() recovers the raw body for
+    the rare client that does not accept gzip (issue #136).
     """
-    session, calls = _counting_upstream(body=b'{"frames": []}')
+    payload = b'{"frames": []}'
+    session, calls = _counting_upstream(body=payload)
     v = _view()
     _inject_session(v, session)
 
-    # First request.
+    # First request (populates the LRU with gzipped bytes).
     _get(v, _ANIMATION_TAIL, accept_encoding="gzip")
     assert len(calls) == 1
 
@@ -475,9 +477,11 @@ def test_cache_hit_without_gzip_serves_raw_body() -> None:
     resp2 = _get(v, _ANIMATION_TAIL, accept_encoding="deflate")
     assert resp2.status == 200
     assert len(calls) == 1, "cache hit must not hit upstream"
-    # Without gzip in Accept-Encoding, should not have Content-Encoding: gzip.
+    # Without gzip in Accept-Encoding, no Content-Encoding: gzip header.
     assert resp2._explicit_headers.get("Content-Encoding") != "gzip"
-    # Should call enable_compression for the raw body.
+    # Decompressed body must match original payload.
+    assert resp2.body == payload
+    # enable_compression() called so aiohttp can negotiate other encodings.
     assert resp2.compression_enabled
 
 
@@ -502,15 +506,21 @@ def test_cache_miss_with_gzip_serves_precompressed_body() -> None:
     )
 
 
-def test_cache_miss_without_gzip_does_not_serve_precompressed() -> None:
-    """Cache miss without gzip: raw body returned with enable_compression."""
-    session, calls = _counting_upstream(body=b'{"frames": []}')
+def test_cache_miss_without_gzip_serves_decompressed_body() -> None:
+    """Cache miss without gzip: decompressed body returned with enable_compression.
+
+    LRU stores only gzipped bytes; on a miss the body is gzipped before caching
+    and returned as gzip. _build_response decompresses for non-gzip clients (#136).
+    """
+    payload = b'{"frames": []}'
+    session, calls = _counting_upstream(body=payload)
     v = _view()
     _inject_session(v, session)
 
     resp = _get(v, _ANIMATION_TAIL, accept_encoding="deflate")
     assert resp.status == 200
     assert resp._explicit_headers.get("Content-Encoding") != "gzip"
+    assert resp.body == payload
     assert resp.compression_enabled
 
 
@@ -846,74 +856,77 @@ def test_immutable_frame_cache_hit() -> None:
 
 
 def test_lru_evicts_oldest_entry_when_full() -> None:
-    """Byte-bounded LRU evicts oldest entry when byte budget exceeded.
+    """Byte-bounded LRU (gz-only) evicts oldest entry when budget exceeded.
 
-    With tuple-based storage (raw + gzipped), the byte accounting is more
-    accurate (counts both raw and compressed sizes). This test verifies that
-    the LRU respects the byte budget and evicts entries when needed.
+    Uses near-incompressible data so gz_size ≈ raw_size, making it easy to
+    reason about how many entries fit before eviction fires (issue #136).
     """
     import gzip as _gzip
+    import os
 
     v = _view()
-    # Fill with entries that don't compress well (random-ish data).
-    # Use smaller entries so we can fit multiple while exceeding budget
-    # with gzipped versions.
-    entry_size = 1024 * 1024  # 1 MB per entry
-    entry_count = int(_LRU_MAX_BYTES / entry_size) + 1  # force overflow
-    # Create data that doesn't compress well (mix of patterns).
-    body_template = (b"x" * 512 + b"y" * 512) * (entry_size // 1024)
-    gzipped_template = _gzip.compress(body_template, 6)
+    # ~512 KB of random (incompressible) data per entry — gz ≈ raw size.
+    raw = os.urandom(512 * 1024)
+    gz = _gzip.compress(raw, 6)
+    gz_size = len(gz)
 
+    # How many entries fit within the budget?
+    entries_that_fit = _LRU_MAX_BYTES // gz_size
+    # Add enough to guarantee eviction.
+    entry_count = entries_that_fit + 3
+
+    tails = []
     for i in range(entry_count):
-        tail = f"product/output/radar/rzc/radar_rzc.2024010{i // 10}_{i:04d}.json"
-        v._cache_put(tail, (body_template, gzipped_template))
+        tail = f"product/output/radar/rzc/radar_rzc.20240101_{i:04d}.json"
+        v._cache_put(tail, gz)
+        tails.append(tail)
 
-    # Add one more entry; it may trigger eviction to stay within budget.
-    new_tail = "product/output/radar/rzc/radar_rzc.20241231_2359.json"
-    small = b'{"new": true}'
-    v._cache_put(new_tail, (small, _gzip.compress(small, 6)))
-
-    # After adding the new entry, verify:
-    # 1. The byte budget is respected (with one entry overage tolerance).
-    assert v._lru_bytes <= _LRU_MAX_BYTES + entry_size, (
-        f"LRU byte budget violated: {v._lru_bytes} > {_LRU_MAX_BYTES + entry_size}"
+    # Budget respected.
+    assert v._lru_bytes <= _LRU_MAX_BYTES, (
+        f"LRU byte budget violated: {v._lru_bytes} > {_LRU_MAX_BYTES}"
     )
-    # 2. The new entry is present.
-    assert new_tail in v._lru, "new entry missing from LRU"
-    # 3. We didn't run away (entries are being evicted when budget exceeded).
-    # With the byte-bounded LRU, we should have far fewer entries than
-    # entry_count.
-    assert len(v._lru) < entry_count, (
-        f"too many entries in LRU: {len(v._lru)} >= {entry_count}"
+    # Newest entry present.
+    assert tails[-1] in v._lru, "newest entry missing from LRU"
+    # Some entries evicted.
+    assert len(v._lru) <= entries_that_fit + 1, (
+        f"too many entries in LRU: {len(v._lru)}"
     )
 
 
 def test_lru_byte_bounded_full_manifest_sweep() -> None:
-    """A full-manifest playback (~291 frames) stays within byte budget without churn."""
+    """Full-manifest sweep (~291 frames) fits in budget with gz-only accounting.
+
+    With the old raw+gz double-counting, a 100 KB frame cost ~100 KB + ~gz_size,
+    limiting the cache to ~180 frames before thrash. With gz-only accounting, the
+    same 20 MB budget holds ~7× more entries, so all 291 frames stay resident.
+    """
     import gzip as _gzip
+    import os
 
     v = _view()
-    # Simulate a full manifest sweep: ~291 frames, each ~100 KB.
-    frame_size = 100 * 1024
     frame_count = 291
-    body_template = b"x" * frame_size
-    gzipped_template = _gzip.compress(body_template, 6)
+    # Use ~30 KB of random data per frame (incompressible → gz ≈ raw), so the
+    # budget maths is straightforward: 291 × 30 KB ≈ 8.7 MB < 20 MB.
+    raw_frame = os.urandom(30 * 1024)
+    gz_frame = _gzip.compress(raw_frame, 6)
+    gz_size = len(gz_frame)
 
     for i in range(frame_count):
         tail = (
             f"product/output/precipitation/animation"
             f"/version__2024010{i // 100:01d}_{i % 100:04d}/en/animation.json"
         )
-        v._cache_put(tail, (body_template, gzipped_template))
+        v._cache_put(tail, gz_frame)
 
-    # Verify the byte budget is respected (allow one frame overage).
-    assert v._lru_bytes <= _LRU_MAX_BYTES + frame_size, (
+    # Budget respected (allow one frame overage tolerance).
+    assert v._lru_bytes <= _LRU_MAX_BYTES + gz_size, (
         f"byte budget violated after {frame_count} frames: "
-        f"{v._lru_bytes} > {_LRU_MAX_BYTES + frame_size}"
+        f"{v._lru_bytes} > {_LRU_MAX_BYTES + gz_size}"
     )
-    # With 20 MB budget and ~100 KB frames, keep ~200 frames (no full thrash).
-    assert len(v._lru) > 150, f"expected many frames cached, got {len(v._lru)}"
-    assert len(v._lru) < frame_count, "not all frames cached (expected)"
+    # With 20 MB budget and ~30 KB gz frames, all 291 frames should fit.
+    assert len(v._lru) == frame_count, (
+        f"expected all {frame_count} frames cached, got {len(v._lru)}"
+    )
 
 
 def test_lru_does_not_cache_versions_json() -> None:
@@ -922,6 +935,47 @@ def test_lru_does_not_cache_versions_json() -> None:
     v._cache_put(_VERSIONS_TAIL, b'{"version": 1}')
     assert _VERSIONS_TAIL not in v._lru
     assert v._versions_cache is not None
+
+
+def test_lru_byte_accounting_counts_gzipped_bytes_only() -> None:
+    """_lru_bytes must track gzipped size only, not raw+gzipped (issue #136)."""
+    import gzip as _gzip
+
+    v = _view()
+    raw = b'{"t":1,"lat":47.4,"lon":8.5}' * 100  # ~2.8 KB — compresses well
+    gz = _gzip.compress(raw, 6)
+
+    v._cache_put(_ANIMATION_TAIL, gz)
+
+    assert v._lru_bytes == len(gz), (
+        f"_lru_bytes should equal gzipped size {len(gz)}, got {v._lru_bytes}"
+    )
+    assert v._lru_bytes < len(raw), "gzipped JSON must be smaller than raw"
+
+
+def test_lru_sizes_attribute_absent() -> None:
+    """_lru_sizes must not exist — it was the redundant parallel structure (#136)."""
+    v = _view()
+    assert not hasattr(v, "_lru_sizes"), (
+        "_lru_sizes was dropped in #136; reintroducing it re-introduces the drift risk"
+    )
+
+
+def test_lru_overwrite_updates_byte_accounting() -> None:
+    """Overwriting an existing LRU entry must subtract old gz size, add new gz size."""
+    import gzip as _gzip
+
+    v = _view()
+    small_gz = _gzip.compress(b'{"v":1}', 6)
+    large_gz = _gzip.compress(b'{"v":2}' * 1000, 6)
+
+    v._cache_put(_ANIMATION_TAIL, small_gz)
+    assert v._lru_bytes == len(small_gz)
+
+    v._cache_put(_ANIMATION_TAIL, large_gz)
+    assert v._lru_bytes == len(large_gz), (
+        "overwrite must replace old accounting, not accumulate"
+    )
 
 
 # ---------------------------------------------------------------------------
