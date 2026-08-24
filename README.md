@@ -1,5 +1,10 @@
 # hass-meteoswiss-radar
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/blob/master/LICENSE)
+[![GitHub Release](https://img.shields.io/github/release/chriguschneider/hass-meteoswiss-radar.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/releases)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master)](https://github.com/chriguschneider/hass-meteoswiss-radar/actions)
+[![hacs](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
+
 MeteoSwiss precipitation radar for Home Assistant: a custom integration that
 proxies the MeteoSwiss app API (their endpoints send no CORS headers) and
 ships a Lovelace card rendering the radar on a swisstopo basemap with Leaflet.
@@ -40,7 +45,11 @@ broken card.
 
 ## Install (HACS)
 
-Not in the default HACS store yet — add it as a custom repository:
+Not in the default HACS store yet. Add it as a custom repository using the button below, or follow the manual steps:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=chriguschneider&repository=hass-meteoswiss-radar&category=integration)
+
+**Manual setup:**
 
 1. HACS → three-dot menu → **Custom repositories**.
 2. Repository: `https://github.com/chriguschneider/hass-meteoswiss-radar`,
@@ -112,6 +121,14 @@ Radar data: [MeteoSwiss](https://www.meteoschweiz.admin.ch). Basemap:
 [swisstopo](https://www.swisstopo.admin.ch). This project is not affiliated
 with either. Map rendering: [Leaflet](https://leafletjs.com) (vendored).
 
+## AI-assisted development
+
+This project leverages AI assistants (Claude, Codex, or other models) for
+development, testing, and documentation. Commits made with AI assistance carry
+a `Co-Authored-By:` trailer naming the tool and model used, ensuring
+transparency in the contribution history.
+
 ## License
 
-MIT
+This project is licensed under the MIT License — see the [LICENSE](LICENSE)
+file for details.
