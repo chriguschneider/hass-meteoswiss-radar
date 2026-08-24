@@ -2130,3 +2130,218 @@ describe("playback state machine (issue #76)", () => {
     });
   });
 });
+
+describe("async-init teardown race (issue #68)", () => {
+  // Bare-instance tests: stub every side-effect that touches real DOM, network,
+  // or timers. The generation counter (_epoch) is the unit under test.
+
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._config = { autoplay_mode: "off" };
+    card._hass = {};
+    Object.defineProperty(card, "isConnected", { get: () => true, configurable: true });
+
+    // DOM stubs — _renderShell builds the shadow DOM; skip it entirely.
+    card._renderShell = () => {};
+    // _createMap sets this._map; let the stub do that so _teardown can call map.remove().
+    card._map = null;
+    card._createMap = (L) => {
+      let removed = false;
+      card._map = { remove() { removed = true; }, get removed() { return removed; } };
+    };
+
+    // Stubs for _loadData internals.
+    card._timeline = { hidden: true };
+    card._playBtn = { hidden: true };
+    card._hideBanner = () => {};
+    card._showBanner = () => {};
+    card._showError = (msg) => { card._lastError = msg; };
+    card._showFrame = () => { card._showFrameCalled = true; };
+    card._prefetch = () => {};
+    card._startPlayCalled = false;
+    card._startPlay = (mode) => { card._startPlayCalled = true; };
+
+    // _pause is called by _teardown; stub so it doesn't touch _raf.
+    card._pause = () => { card._playing = false; };
+    // _stopRecoveryTimer is called by _teardown.
+    card._stopRecoveryTimer = () => {};
+
+    card._refreshTimerStarted = false;
+    card._startRefreshTimer = () => { card._refreshTimerStarted = true; };
+
+    return card;
+  }
+
+  function makeManifestStub(card) {
+    card._refreshManifest = async () => {
+      card._frames = [{ url: "frame-0", type: "measurement", ts: 0 }];
+      card._animVersion = "v1";
+    };
+    card._api = () => Promise.resolve({ coords: GRID, areas: [] });
+  }
+
+  // Helper: deferred promise
+  function deferred() {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+
+  it("_epoch starts at 0 and increments on _teardown", () => {
+    const card = makeCard();
+    expect(card._epoch).toBe(0);
+    card._initialized = true;
+    card._teardown();
+    expect(card._epoch).toBe(1);
+  });
+
+  it("_teardown does not increment _epoch when the card was never initialized", () => {
+    const card = makeCard();
+    card._teardown();
+    expect(card._epoch).toBe(0);
+  });
+
+  it("_maybeInit does not create a map or start a timer when _teardown fires before loadLeaflet resolves", async () => {
+    const card = makeCard();
+    makeManifestStub(card);
+
+    const d = deferred();
+    card._loadLeaflet = () => d.promise;
+
+    // Start init — suspends at await this._loadLeaflet().
+    const initPromise = card._maybeInit();
+    expect(card._initialized).toBe(true);
+
+    // Teardown fires while Leaflet is still loading.
+    card._teardown();
+    expect(card._epoch).toBe(1);
+    expect(card._initialized).toBe(false);
+
+    // Now the slow Leaflet load resolves.
+    d.resolve({});
+    await initPromise;
+
+    // The stale continuation must have bailed without creating a map or timer.
+    expect(card._map).toBe(null);
+    expect(card._refreshTimerStarted).toBe(false);
+  });
+
+  it("_maybeInit does not start the refresh timer when _teardown fires after loadLeaflet but before _loadData resolves", async () => {
+    const card = makeCard();
+
+    const dLoad = deferred();
+    card._loadLeaflet = () => Promise.resolve({});
+    card._loadData = () => dLoad.promise;
+
+    const initPromise = card._maybeInit();
+
+    // Drain all queued microtasks (including the _maybeInit continuation past
+    // `await _loadLeaflet`) so we're sitting inside `await _loadData` before
+    // teardown fires. setTimeout fires after all pending microtasks.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Teardown fires while _loadData is pending.
+    card._teardown();
+    expect(card._epoch).toBe(1);
+
+    dLoad.resolve();
+    await initPromise;
+
+    expect(card._refreshTimerStarted).toBe(false);
+  });
+
+  it("_loadData does not start autoplay when _teardown fires after _refreshManifest resolves", async () => {
+    const card = makeCard();
+    card._config = { autoplay_mode: "window" };
+
+    const dEnsure = deferred();
+    let manifestDone = false;
+    card._refreshManifest = async () => {
+      card._frames = [{ url: "frame-0", type: "measurement", ts: 0 }];
+      manifestDone = true;
+    };
+    card._ensureFrame = () => dEnsure.promise;
+
+    const loadPromise = card._loadData();
+    // Yield until _refreshManifest has resolved and _ensureFrame is awaited.
+    await Promise.resolve();
+    expect(manifestDone).toBe(true);
+
+    // Teardown fires between _refreshManifest and _ensureFrame completing.
+    card._initialized = true; // needed for _teardown's guard
+    card._teardown();
+    expect(card._epoch).toBe(1);
+
+    dEnsure.resolve([]);
+    await loadPromise;
+
+    // No frame shown, no autoplay, no _dataReady.
+    expect(card._showFrameCalled).toBeUndefined();
+    expect(card._startPlayCalled).toBe(false);
+    expect(card._dataReady).toBe(false);
+  });
+
+  it("_loadData does not start autoplay when _teardown fires after _ensureFrame resolves", async () => {
+    const card = makeCard();
+    card._config = { autoplay_mode: "full" };
+    makeManifestStub(card);
+
+    // Stub _ensureFrame with a deferred promise so we control when it resolves.
+    let ensureFrameResolve;
+    card._ensureFrame = (url) => {
+      return new Promise((res) => { ensureFrameResolve = () => res([]); });
+    };
+
+    const loadPromise = card._loadData();
+
+    // Drain all pending microtasks so _refreshManifest has resolved and
+    // _ensureFrame has been called (setting ensureFrameResolve).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(typeof ensureFrameResolve).toBe("function");
+
+    // Resolve _ensureFrame, then synchronously teardown before the continuation
+    // microtask runs. The epoch check in _loadData catches the stale state.
+    ensureFrameResolve();
+    card._initialized = true;
+    card._teardown();
+    expect(card._epoch).toBe(1);
+
+    await loadPromise;
+
+    expect(card._startPlayCalled).toBe(false);
+    expect(card._dataReady).toBe(false);
+  });
+
+  it("on re-attach a new _maybeInit succeeds after a stale one was abandoned", async () => {
+    const card = makeCard();
+    card._config = { autoplay_mode: "off" };
+    makeManifestStub(card);
+
+    const dFirstLeaflet = deferred();
+    let leafletCallCount = 0;
+    card._loadLeaflet = () => {
+      leafletCallCount++;
+      if (leafletCallCount === 1) return dFirstLeaflet.promise;
+      return Promise.resolve({});
+    };
+
+    // First init — suspended waiting for Leaflet.
+    const firstInit = card._maybeInit();
+    expect(card._initialized).toBe(true);
+
+    // Teardown fires; then card re-attaches and a second init starts.
+    card._teardown();
+    card._map = null; // teardown nulled map; simulate re-attach
+    const secondInit = card._maybeInit();
+
+    // Resolve the first Leaflet load (stale) and then the second.
+    dFirstLeaflet.resolve({});
+    await firstInit;
+
+    await secondInit;
+
+    // The second init should have completed, setting _initialized = true.
+    expect(card._initialized).toBe(true);
+    expect(card._refreshTimerStarted).toBe(true);
+  });
+});
