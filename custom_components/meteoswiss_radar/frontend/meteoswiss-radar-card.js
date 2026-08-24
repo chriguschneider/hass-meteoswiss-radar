@@ -479,6 +479,16 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._initialized = true;
     const epoch = this._epoch;
     this._renderShell();
+    // Start the manifest + first-frame fetch before awaiting Leaflet so both
+    // network chains overlap. Only _showFrame needs _radar; everything before
+    // it can run while the script is still loading.
+    const earlyFetch = (async () => {
+      await this._refreshManifest(true);
+      if (this._epoch !== epoch) return;
+      await this._ensureFrame(this._frames[this._lastMeasurementIndex()].url);
+    })();
+    // Prevent an unhandled rejection while Leaflet is still loading.
+    earlyFetch.catch(() => {});
     try {
       this._L = await this._loadLeaflet();
       // Guard: _teardown may have fired while we awaited Leaflet.
@@ -495,7 +505,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       return;
     }
     try {
-      await this._loadData();
+      await this._loadData(earlyFetch);
     } catch (err) {
       if (this._epoch !== epoch) return;
       console.warn("meteoswiss-radar-card: initial data load failed:", err);
@@ -778,17 +788,27 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   /* ---------- data ---------- */
 
-  async _loadData() {
+  async _loadData(earlyFetch) {
     const epoch = this._epoch;
-    await this._refreshManifest(true);
-    // Guard: bail if _teardown fired while awaiting the manifest so we don't
-    // show a stale frame, set _dataReady, or spin an autoplay loop on a card
-    // that is no longer attached.
-    if (this._epoch !== epoch) return;
-    this._hideBanner();
+    if (earlyFetch) {
+      // Init path: manifest + first frame were already fetched in parallel with
+      // Leaflet. Joining here avoids a redundant round-trip.
+      await earlyFetch;
+      if (this._epoch !== epoch) return;
+      this._hideBanner();
+    } else {
+      // Refresh-timer path (or init retry after earlyFetch error): fetch fresh.
+      await this._refreshManifest(true);
+      // Guard: bail if _teardown fired while awaiting the manifest so we don't
+      // show a stale frame, set _dataReady, or spin an autoplay loop on a card
+      // that is no longer attached.
+      if (this._epoch !== epoch) return;
+      this._hideBanner();
+      const idx = this._lastMeasurementIndex();
+      await this._ensureFrame(this._frames[idx].url);
+      if (this._epoch !== epoch) return;
+    }
     const idx = this._lastMeasurementIndex();
-    await this._ensureFrame(this._frames[idx].url);
-    if (this._epoch !== epoch) return;
     this._showFrame(idx);
     this._prefetch(idx);
     this._timeline.hidden = false;

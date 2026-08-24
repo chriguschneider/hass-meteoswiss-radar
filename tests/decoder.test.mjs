@@ -2344,4 +2344,87 @@ describe("async-init teardown race (issue #68)", () => {
     expect(card._initialized).toBe(true);
     expect(card._refreshTimerStarted).toBe(true);
   });
+
+  it("data chain starts before Leaflet resolves (parallel fetch, issue #72)", async () => {
+    const card = makeCard();
+    makeManifestStub(card);
+
+    // Track when _refreshManifest is first called.
+    let manifestStarted = false;
+    const origManifest = card._refreshManifest.bind(card);
+    card._refreshManifest = async (...args) => {
+      manifestStarted = true;
+      return origManifest(...args);
+    };
+
+    // Leaflet load is slow (deferred).
+    const dLeaflet = deferred();
+    card._loadLeaflet = () => dLeaflet.promise;
+
+    const initPromise = card._maybeInit();
+
+    // Yield one microtask tick so the earlyFetch IIFE can start.
+    await Promise.resolve();
+
+    // _refreshManifest should have been called even though Leaflet is still pending.
+    expect(manifestStarted).toBe(true);
+
+    // Now resolve Leaflet; _createMap runs, then _loadData joins earlyFetch.
+    dLeaflet.resolve({});
+    await initPromise;
+
+    expect(card._initialized).toBe(true);
+    expect(card._refreshTimerStarted).toBe(true);
+    expect(card._showFrameCalled).toBe(true);
+  });
+
+  it("earlyFetch data-chain failure is caught and shown as a banner", async () => {
+    const card = makeCard();
+
+    const dLeaflet = deferred();
+    card._loadLeaflet = () => dLeaflet.promise;
+
+    // Stub manifest to reject — simulates a network error during earlyFetch.
+    card._refreshManifest = async () => { throw new Error("network error"); };
+
+    const initPromise = card._maybeInit();
+
+    dLeaflet.resolve({});
+    await initPromise;
+
+    // Card must not be stuck: _initialized is true (no retry needed after
+    // Leaflet succeeded), the banner is shown, and the refresh timer runs so
+    // the timer loop can retry _loadData.
+    expect(card._initialized).toBe(true);
+    expect(card._refreshTimerStarted).toBe(true);
+  });
+
+  it("earlyFetch bails without calling _ensureFrame when _teardown fires after _refreshManifest", async () => {
+    const card = makeCard();
+
+    const dLeaflet = deferred();
+    card._loadLeaflet = () => dLeaflet.promise;
+
+    let ensureFrameCalled = false;
+    card._ensureFrame = () => { ensureFrameCalled = true; return Promise.resolve([]); };
+
+    const dManifest = deferred();
+    card._refreshManifest = () => {
+      card._frames = [{ url: "frame-0", type: "measurement", ts: 0 }];
+      return dManifest.promise;
+    };
+
+    const initPromise = card._maybeInit();
+
+    // Teardown before manifest resolves.
+    card._teardown();
+    dManifest.resolve();
+
+    dLeaflet.resolve({});
+    await initPromise;
+
+    // earlyFetch should have bailed at the epoch check, skipping _ensureFrame.
+    expect(ensureFrameCalled).toBe(false);
+    expect(card._refreshTimerStarted).toBe(false);
+  });
 });
