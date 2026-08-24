@@ -19,7 +19,7 @@ from pathlib import Path
 from aiohttp import ClientError, ClientTimeout, web
 
 from homeassistant.components.frontend import add_extra_js_url, remove_extra_js_url
-from homeassistant.components.http import HomeAssistantView, StaticPathConfig
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -30,7 +30,6 @@ from .const import (
     FRONTEND_URL_BASE,
     PROXY_URL,
     UPSTREAM_BASE,
-    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -246,6 +245,68 @@ class MeteoSwissRadarCardView(HomeAssistantView):
         )
 
 
+# Vendored assets live flat on disk (frontend/vendor/leaflet.js, .../images/*);
+# the {tag} URL segment is purely an opaque cache-buster and is NEVER used to
+# resolve a filesystem path. Only these relative paths may be served -- an
+# allowlist, not the disk layout, is the security boundary (mirrors the proxy
+# allowlist in ADR-0001). The extension also fixes the Content-Type.
+_VENDOR_FILES = {
+    "leaflet.js": "text/javascript",
+    "leaflet.css": "text/css",
+    "images/layers.png": "image/png",
+    "images/layers-2x.png": "image/png",
+    "images/marker-icon.png": "image/png",
+    "images/marker-icon-2x.png": "image/png",
+    "images/marker-shadow.png": "image/png",
+}
+
+
+class MeteoSwissRadarVendorView(HomeAssistantView):
+    """Serve vendored assets version-agnostically (issue #70).
+
+    The card requests /vendor/<tag>/<file>, where <tag> is the card version
+    used only as an opaque cache-buster. A static mount keyed on the current
+    Python VERSION broke two cases: a card left open across an upgrade asks
+    for the *old* tag (404 -> "Leaflet failed to load" until reload), and a
+    new card running against a not-yet-restarted process (after a HACS file
+    swap) asks for a tag the running mount does not know -- the same 404, and
+    the exact wall that forces a restart for JS-only updates (issue #91).
+
+    This view ignores <tag> for resolution and reads frontend/vendor/<file>
+    from disk at request time, so every tag resolves as long as the file
+    exists. <file> must be one of _VENDOR_FILES, and the resolved path is
+    re-checked for containment so a traversal attempt in <file> cannot escape
+    the vendor directory.
+    """
+
+    url = f"{FRONTEND_URL_BASE}/vendor/{{tag}}/{{filename:.+}}"
+    name = "meteoswiss_radar:vendor"
+    requires_auth = False
+
+    async def get(
+        self, request: web.Request, tag: str, filename: str
+    ) -> web.FileResponse | web.Response:
+        content_type = _VENDOR_FILES.get(filename)
+        if content_type is None:
+            return web.Response(status=404)
+        vendor_dir = (Path(__file__).parent / "frontend" / "vendor").resolve()
+        asset_path = (vendor_dir / filename).resolve()
+        # Defence in depth: the allowlist already excludes traversal, but never
+        # serve a path that resolves outside the vendor directory.
+        if (
+            not asset_path.is_relative_to(vendor_dir)
+            or not asset_path.is_file()
+        ):
+            return web.Response(status=404)
+        return web.FileResponse(
+            asset_path,
+            headers={
+                "Content-Type": content_type,
+                "Cache-Control": "private, max-age=86400, immutable",
+            },
+        )
+
+
 # Routes (the two HTTP views and the static vendor mounts) can only be
 # registered once per HA run: HA has no API to unregister a view or a static
 # path, so a config-entry reload must not re-register them. This flag is
@@ -268,31 +329,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.http.register_view(MeteoSwissRadarProxyView(hass))
     hass.http.register_view(MeteoSwissRadarCardView())
-
-    frontend_dir = Path(__file__).parent / "frontend"
-    vendor_dir = str(frontend_dir / "vendor")
-    await hass.http.async_register_static_paths(
-        [
-            # Vendored assets are immutable per release and stay cached; the
-            # VERSION segment is what busts that cache on upgrade.
-            StaticPathConfig(
-                f"{FRONTEND_URL_BASE}/vendor/{VERSION}",
-                vendor_dir,
-                cache_headers=True,
-            ),
-            # Unversioned fallback for cards from before the versioned path: a
-            # dashboard tab left open across an upgrade keeps running the old
-            # card, which asks for this URL the first time it needs Leaflet, and
-            # would otherwise show "Leaflet failed to load" until a page reload.
-            # It cannot shadow the versioned mount above -- aiohttp resolves the
-            # most explicit URL prefix first, not in registration order.
-            StaticPathConfig(
-                f"{FRONTEND_URL_BASE}/vendor",
-                vendor_dir,
-                cache_headers=True,
-            ),
-        ]
-    )
+    # A view (not a static mount): the {tag} in the vendor URL must map to the
+    # same on-disk files regardless of which version stamped it, so old and new
+    # cards both resolve across an upgrade or a restart-free JS update (#70).
+    hass.http.register_view(MeteoSwissRadarVendorView())
     hass.data[_ROUTES_KEY] = True
     _register_card_resource(hass)
     return True

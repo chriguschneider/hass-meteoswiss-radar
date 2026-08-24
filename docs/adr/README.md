@@ -30,3 +30,4 @@ added test coverage, and prose/style tweaks.
 
 - [0001 — Proxy path allowlist as the security boundary](0001-proxy-path-allowlist.md)
 - [0002 — Card ships as raw JS, no build step](0002-no-build-step-raw-card.md)
+- [0003 — Vendor assets served version-agnostically by an allowlist view](0003-version-agnostic-vendor-serving.md)
