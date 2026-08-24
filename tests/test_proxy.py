@@ -556,6 +556,91 @@ def test_inflight_joiner_with_gzip_gets_precompressed_body() -> None:
     asyncio.run(_run())
 
 
+def test_gzip_q0_explicit_refusal_serves_decompressed_body() -> None:
+    """Accept-Encoding: gzip;q=0 is an explicit refusal — serve raw body (issue #137).
+
+    The old `"gzip" in accept_encoding` substring check would treat this as
+    acceptance and serve gzip bytes that the client declared it won't decode.
+    """
+    payload = b'{"frames": []}'
+    session, _ = _counting_upstream(body=payload)
+    v = _view()
+    _inject_session(v, session)
+
+    # Populate the LRU first with a gzip-accepting request.
+    _get(v, _ANIMATION_TAIL, accept_encoding="gzip")
+
+    # Now request with gzip explicitly refused via q=0.
+    resp = _get(v, _ANIMATION_TAIL, accept_encoding="gzip;q=0, identity")
+    assert resp.status == 200
+    assert resp._explicit_headers.get("Content-Encoding") != "gzip", (
+        "gzip;q=0 must not yield a gzip-encoded response"
+    )
+    assert resp.body == payload, "body must be the raw (decompressed) payload"
+    assert resp.compression_enabled
+
+
+def test_vary_accept_encoding_present_on_animation_response() -> None:
+    """Non-versions.json responses carry Vary: Accept-Encoding (issue #137)."""
+    session, _ = _counting_upstream(body=b'{"frames": []}')
+    v = _view()
+    _inject_session(v, session)
+
+    resp = _get(v, _ANIMATION_TAIL, accept_encoding="gzip")
+    assert resp._explicit_headers.get("Vary") == "Accept-Encoding"
+
+
+def test_vary_accept_encoding_absent_on_versions_json() -> None:
+    """versions.json is no-store; no negotiation → no Vary header (issue #137)."""
+    session, _ = _counting_upstream(body=b'{"version": 1}')
+    v = _view()
+    _inject_session(v, session)
+
+    resp = _get(v, _VERSIONS_TAIL)
+    assert "Vary" not in resp._explicit_headers
+
+
+# ---------------------------------------------------------------------------
+# Tests: _accepts_gzip helper (RFC 9110 q-value parsing)
+# ---------------------------------------------------------------------------
+
+def _accepts_gzip(header: str) -> bool:
+    return _integration._accepts_gzip(header)
+
+
+@pytest.mark.parametrize("header,expected", [
+    # Normal gzip acceptance
+    ("gzip", True),
+    ("gzip, deflate", True),
+    ("deflate, gzip", True),
+    ("gzip;q=1", True),
+    ("gzip;q=0.5", True),
+    # Wildcard acceptance covers gzip when gzip is not listed
+    ("*", True),
+    ("*;q=0.5", True),
+    # Explicit gzip refusal (the bug scenario from issue #137)
+    ("gzip;q=0", False),
+    ("gzip;q=0, identity", False),
+    ("identity, gzip;q=0.0", False),
+    # No gzip at all
+    ("", False),
+    ("deflate", False),
+    ("br", False),
+    # Wildcard refused → gzip also refused
+    ("*;q=0", False),
+    # gzip explicit takes precedence over wildcard
+    ("gzip;q=0, *;q=1", False),
+    ("gzip;q=1, *;q=0", True),
+    # Edge cases: whitespace
+    ("  gzip  ;  q=0.8  ", True),
+    ("  gzip  ;  q=0  ", False),
+])
+def test_accepts_gzip_parametrized(header: str, expected: bool) -> None:
+    assert _accepts_gzip(header) is expected, (
+        f"_accepts_gzip({header!r}) expected {expected}"
+    )
+
+
 def test_compression_uses_executor_job() -> None:
     """gzip.compress must be dispatched via async_add_executor_job, not inline.
 

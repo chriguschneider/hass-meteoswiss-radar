@@ -66,6 +66,37 @@ _ALLOWED_PATHS = (
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
 _VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
+
+
+def _accepts_gzip(accept_encoding: str) -> bool:
+    """Return True if gzip is accepted with q > 0 per RFC 9110 §12.5.3.
+
+    A bare substring check (`"gzip" in header`) treats `gzip;q=0` — an
+    explicit refusal — as acceptance.  This function parses each token and
+    its q-weight so that q=0 correctly maps to "not accepted" (issue #137).
+    """
+    gzip_q: float | None = None
+    wildcard_q: float | None = None
+    for part in accept_encoding.split(","):
+        token_parts = [s.strip() for s in part.split(";")]
+        coding = token_parts[0].lower()
+        q = 1.0
+        for param in token_parts[1:]:
+            name, _, val = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    q = float(val.strip())
+                except ValueError:
+                    pass
+        if coding == "gzip":
+            gzip_q = q
+        elif coding == "*":
+            wildcard_q = q
+    if gzip_q is not None:
+        return gzip_q > 0.0
+    if wildcard_q is not None:
+        return wildcard_q > 0.0
+    return False
 # Byte-bounded LRU that accounts gzipped bytes only: the 20 MB budget now holds
 # ~7× more entries than the previous raw+gz double-counting, keeping a full
 # manifest (~291 frames) and any active overlay layers resident without thrash
@@ -272,12 +303,19 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         if tail.endswith("versions.json"):
             # Raw bytes; let aiohttp negotiate compression via enable_compression().
             response_body = body
+            serve_pregzipped = False
         else:
             # LRU body is always gzipped; serve it directly when the client
             # accepts gzip (issue #74), otherwise decompress for the rare client
-            # that does not (issue #136).
-            accept_encoding = request.headers.get("Accept-Encoding", "")
-            if "gzip" in accept_encoding:
+            # that does not (issue #136).  Use a token-aware q-value check so
+            # that `gzip;q=0` (explicit refusal, RFC 9110) is not treated as
+            # acceptance (issue #137).
+            serve_pregzipped = _accepts_gzip(
+                request.headers.get("Accept-Encoding", "")
+            )
+            # Vary header so any intervening shared cache keys on the encoding.
+            headers["Vary"] = "Accept-Encoding"
+            if serve_pregzipped:
                 response_body = body
                 headers["Content-Encoding"] = "gzip"
             else:
@@ -289,8 +327,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             charset="utf-8",
             headers=headers,
         )
-        # Enable compression only when we haven't already applied Content-Encoding.
-        if "Content-Encoding" not in headers:
+        if not serve_pregzipped:
             resp.enable_compression()
         return resp
 
