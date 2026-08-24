@@ -36,10 +36,21 @@ def _card_version() -> str:
     return match.group(1)
 
 
+def _package_version() -> str:
+    return json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+
+
 def test_versions_are_in_sync() -> None:
+    """All four version strings must move together.
+
+    package.json was left out of this check until #64 and had silently drifted
+    a patch release behind, so `npm test` printed a version the card did not
+    ship as. Every file that carries the version belongs here, or it drifts.
+    """
     manifest_version = _manifest()["version"]
-    assert _const_version() == manifest_version
-    assert _card_version() == manifest_version
+    assert _const_version() == manifest_version, "const.py VERSION out of sync"
+    assert _card_version() == manifest_version, "card CARD_VERSION out of sync"
+    assert _package_version() == manifest_version, "package.json version out of sync"
 
 
 def test_manifest_has_required_keys() -> None:
