@@ -8,6 +8,14 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+## [v0.10.0] — 2026-08-24
+
+### Added
+
+- Card: lightning strike overlay (`layer_lightning: true`) — point data from
+  the MeteoSwiss lightning product, fetched once per version and filtered
+  per measurement frame client-side; empty on forecast frames by design (#93)
+
 ### Fixed
 
 - Proxy: detach in-flight fetch task so leader cancellation cannot kill
@@ -100,7 +108,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.10.0...HEAD
+[v0.10.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...v0.10.0
 [v0.9.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.8.0...v0.9.0
 [0.8.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.7.6...0.8.0
 [0.7.6]: https://github.com/chriguschneider/hass-meteoswiss-radar/releases/tag/0.7.6

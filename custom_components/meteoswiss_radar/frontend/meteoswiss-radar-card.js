@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.9.0";
+const CARD_VERSION = "0.10.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -30,6 +30,12 @@ const RECOVERY_INTERVAL_MS = 15000; // probe cadence while failure-paused
 const TEARDOWN_DEBOUNCE_MS = 2000; // grace before a detached card frees its map
 const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
+
+// Lightning strike overlay: yellow glyph on the grey swisstopo basemap.
+const LIGHTNING_COLOR = "#FFFF00";
+const LIGHTNING_OUTLINE = "#333333";
+// Half-height of the bolt glyph in canvas pixels (independent of zoom).
+const LIGHTNING_GLYPH_PX = 7;
 
 // App-parity overlay legend colors (display only; frame-carried colors are used for fills).
 const OVERLAY_COLORS = {
@@ -62,6 +68,36 @@ const OVERLAY_ON_KEY = {
   snowrain: "layer_snowrain_on",
   freezingrain: "layer_freezing_rain_on",
 };
+
+/* Parse lightning.json → Map<ts(number), [[lat,lng], ...]>.
+ * Coerces the flat-dict string keys and string coordinate pairs to numbers. */
+function parseLightning(json) {
+  const map = new Map();
+  for (const [key, strikes] of Object.entries(json)) {
+    const ts = Number(key);
+    if (!Number.isFinite(ts)) continue;
+    const coords = strikes.map(([lat, lng]) => [Number(lat), Number(lng)]);
+    map.set(ts, coords);
+  }
+  return map;
+}
+
+/* Return the [lat,lng] pairs whose 5-min bucket falls within the frame window
+ * [frameTs, frameTs + duration), where duration = |nextFrameTs - frameTs|
+ * when the next frame is known, or 300 s as a fallback for the last frame. */
+function strikesForFrame(lightningMap, frameTs, nextFrameTs) {
+  const duration = nextFrameTs != null
+    ? Math.abs(nextFrameTs - frameTs)
+    : 300;
+  const out = [];
+  for (const [ts, coords] of lightningMap) {
+    const offset = ts - frameTs;
+    if (offset >= 0 && offset < duration) {
+      for (const coord of coords) out.push(coord);
+    }
+  }
+  return out;
+}
 
 let leafletLoader = null;
 function loadLeaflet() {
@@ -289,6 +325,86 @@ function makeRadarLayerClass(L) {
   });
 }
 
+/* Canvas layer for lightning strike points.
+ * Draws one bolt glyph per strike using a single shared Path2D + setTransform;
+ * no per-frame path cache needed (point data, not projected polygons). */
+function makeLightningLayerClass(L) {
+  return L.Layer.extend({
+    initialize() {
+      this._strikes = null;
+      this._bolt = null; // shared Path2D, built once
+    },
+
+    onAdd(map) {
+      this._map = map;
+      this._canvas = L.DomUtil.create("canvas", "leaflet-zoom-hide");
+      this._canvas.style.pointerEvents = "none";
+      map.getPane("overlayPane").appendChild(this._canvas);
+      map.on("moveend zoomend resize viewreset", this._reset, this);
+      this._reset();
+      return this;
+    },
+
+    onRemove(map) {
+      map.off("moveend zoomend resize viewreset", this._reset, this);
+      L.DomUtil.remove(this._canvas);
+    },
+
+    setStrikes(strikes) {
+      this._strikes = strikes;
+      this._redraw();
+    },
+
+    _reset() {
+      const size = this._map.getSize();
+      if (this._canvas.width !== size.x) this._canvas.width = size.x;
+      if (this._canvas.height !== size.y) this._canvas.height = size.y;
+      this._origin = this._map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._origin);
+      this._redraw();
+    },
+
+    _getBolt() {
+      if (!this._bolt) {
+        const g = LIGHTNING_GLYPH_PX;
+        // Classic lightning bolt: top-right → mid-left → mid-right →
+        // bottom-left → back up to mid-right → close to top-right.
+        const p = new Path2D();
+        p.moveTo(2, -g);
+        p.lineTo(-2, 0);
+        p.lineTo(1, 0);
+        p.lineTo(-2, g);
+        p.lineTo(2, 0);
+        p.lineTo(-1, 0);
+        p.closePath();
+        this._bolt = p;
+      }
+      return this._bolt;
+    },
+
+    _redraw() {
+      if (!this._canvas || !this._map) return;
+      const ctx = this._canvas.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+      if (!this._strikes || !this._strikes.length) return;
+      const bolt = this._getBolt();
+      const ox = this._origin.x;
+      const oy = this._origin.y;
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 2;
+      for (const [lat, lng] of this._strikes) {
+        const pt = this._map.latLngToLayerPoint([lat, lng]);
+        ctx.setTransform(1, 0, 0, 1, pt.x - ox, pt.y - oy);
+        ctx.strokeStyle = LIGHTNING_OUTLINE;
+        ctx.stroke(bolt);
+        ctx.fillStyle = LIGHTNING_COLOR;
+        ctx.fill(bolt);
+      }
+    },
+  });
+}
+
 const HOUSE_ICON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="26" height="26">' +
   '<path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" fill="#1976d2" stroke="#fff" stroke-width="1.6"/></svg>';
@@ -333,6 +449,11 @@ class MeteoSwissRadarCard extends HTMLElement {
     // Initialised from layer_<x>_on config in _createMap; flipped by the map
     // toggle buttons. Independent of _overlayLayers (a layer can exist but be off).
     this._overlayActive = {};
+    // Lightning point-data overlay: fetched once per version, filtered per frame.
+    this._lightningMap = null;      // Map<ts, [[lat,lng]]> parsed from lightning.json
+    this._lightningVersion = null;  // version string of the last successful fetch
+    this._lightningLayer = null;    // LightningLayer canvas layer (or null if not enabled)
+    this._lightningActive = false;  // toggle state: true = overlay visible
   }
 
   setConfig(config) {
@@ -480,6 +601,10 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._radar = null;
     this._overlayLayers = {};
     this._overlayActive = {};
+    this._lightningLayer = null;
+    this._lightningMap = null;
+    this._lightningVersion = null;
+    this._lightningActive = false;
     this._cache.clear();
     this._cacheSizes.clear();
     this._cacheBytes = 0;
@@ -854,6 +979,14 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._overlayLayers[key] = new RadarLayer().addTo(this._map);
       this._overlayActive[key] = !!this._config[OVERLAY_ON_KEY[key]];
     }
+    // Lightning layer sits above the contour overlays in z-order.
+    this._lightningLayer = null;
+    this._lightningActive = false;
+    if (this._config.layer_lightning) {
+      const LightningLayer = makeLightningLayerClass(L);
+      this._lightningLayer = new LightningLayer().addTo(this._map);
+      this._lightningActive = !!this._config.layer_lightning_on;
+    }
     this._buildLayerToggles();
 
     // The shadow-DOM stylesheet may finish loading after map creation; without
@@ -881,6 +1014,19 @@ class MeteoSwissRadarCard extends HTMLElement {
       btn.addEventListener("click", () => this._toggleOverlay(key));
       this._layerTogglesEl.appendChild(btn);
     }
+    // Lightning toggle (separate: point-data layer, not a contour overlay).
+    if (this._lightningLayer) {
+      anyEnabled = true;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ltbtn" + (this._lightningActive ? " active" : "");
+      btn.title = "Lightning";
+      btn.setAttribute("aria-label", "Lightning");
+      btn.setAttribute("data-layer", "lightning");
+      btn.innerHTML = this._lightningToggleSvg(this._lightningActive);
+      btn.addEventListener("click", () => this._toggleLightning());
+      this._layerTogglesEl.appendChild(btn);
+    }
     this._layerTogglesEl.hidden = !anyEnabled;
   }
 
@@ -891,6 +1037,32 @@ class MeteoSwissRadarCard extends HTMLElement {
       `<rect x="2" y="2" width="14" height="14" rx="2" ry="2"` +
       ` fill="${fill}" stroke="${stroke}" stroke-width="2"/>` +
       `</svg>`;
+  }
+
+  _lightningToggleSvg(active) {
+    const fill = active ? LIGHTNING_COLOR : "none";
+    const stroke = active ? "#999" : "#aaa";
+    return `<svg width="18" height="18" viewBox="0 0 18 18">` +
+      `<path d="M10 2L4 10h5l-1 6 7-8h-5z"` +
+      ` fill="${fill}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>` +
+      `</svg>`;
+  }
+
+  _toggleLightning() {
+    this._lightningActive = !this._lightningActive;
+    if (this._layerTogglesEl) {
+      const btn = this._layerTogglesEl.querySelector('[data-layer="lightning"]');
+      if (btn) {
+        btn.classList.toggle("active", this._lightningActive);
+        btn.innerHTML = this._lightningToggleSvg(this._lightningActive);
+      }
+    }
+    if (!this._lightningActive) {
+      if (this._lightningLayer) this._lightningLayer.setStrikes([]);
+    } else {
+      this._showLightningForFrame(this._frameIndex);
+    }
+    this._updateOverlayLegend();
   }
 
   _toggleOverlay(key) {
@@ -958,6 +1130,22 @@ class MeteoSwissRadarCard extends HTMLElement {
     const version = versions["precipitation/animation"];
     if (!version) throw new Error("versions.json has no precipitation/animation entry");
     if (!force && version === this._animVersion) return;
+    // Fetch lightning.json once per version change; independent of force flag.
+    const lightningVersion = versions["lightning"];
+    if (lightningVersion && lightningVersion !== this._lightningVersion) {
+      this._lightningVersion = lightningVersion; // prevent duplicate concurrent fetches
+      this._api(
+        `product/output/lightning/version__${lightningVersion}/lightning.json`
+      )
+        .then((json) => {
+          this._lightningMap = parseLightning(json);
+          if (this._dataReady) this._showLightningForFrame(this._frameIndex);
+        })
+        .catch(() => {
+          // Allow retry on the next manifest refresh.
+          this._lightningVersion = null;
+        });
+    }
     const animation = await this._api(
       `product/output/precipitation/animation/version__${version}/de/animation.json`
     );
@@ -1099,8 +1287,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       : OVERLAY_ORDER.filter(
           (key) => this._overlayLayers[key] && this._overlayActive[key]
         );
+    const lightningOn = !legendOff && this._lightningLayer && this._lightningActive;
     this._overlaySwatch.textContent = "";
-    if (!active.length) {
+    if (!active.length && !lightningOn) {
       this._overlaySwatch.hidden = true;
       return;
     }
@@ -1111,6 +1300,18 @@ class MeteoSwissRadarCard extends HTMLElement {
       chip.style.background = OVERLAY_COLORS[key];
       const label = document.createElement("b");
       label.textContent = OVERLAY_LABELS[key];
+      cell.appendChild(chip);
+      cell.appendChild(label);
+      this._overlaySwatch.appendChild(cell);
+    }
+    if (lightningOn) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const chip = document.createElement("i");
+      chip.style.background = LIGHTNING_COLOR;
+      chip.style.borderRadius = "50%";
+      const label = document.createElement("b");
+      label.textContent = "Lightning";
       cell.appendChild(chip);
       cell.appendChild(label);
       this._overlaySwatch.appendChild(cell);
@@ -1603,6 +1804,24 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._radar.setFrame(f.url, areas);
     this._moveMarkers(idx);
     this._showOverlaysForFrame(idx);
+    this._showLightningForFrame(idx);
+  }
+
+  _showLightningForFrame(idx) {
+    const layer = this._lightningLayer;
+    if (!layer) return;
+    if (!this._lightningActive || !this._lightningMap) {
+      layer.setStrikes([]);
+      return;
+    }
+    const f = this._frames[idx];
+    if (!f || f.type !== "measurement") {
+      // Lightning overlay is empty on forecast frames (strikes are only in past buckets).
+      layer.setStrikes([]);
+      return;
+    }
+    const next = this._frames[idx + 1];
+    layer.setStrikes(strikesForFrame(this._lightningMap, f.ts, next ? next.ts : null));
   }
 
   _showOverlaysForFrame(idx) {
