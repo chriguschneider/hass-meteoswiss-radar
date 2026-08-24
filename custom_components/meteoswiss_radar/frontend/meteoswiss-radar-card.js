@@ -114,6 +114,39 @@ function loadLeaflet() {
   return leafletLoader;
 }
 
+const SHARED_DECODE_CACHE = {
+  _cache: new Map(),
+  _cacheSizes: new Map(),
+  _cacheBytes: 0,
+
+  get(url) {
+    const v = this._cache.get(url);
+    if (v) {
+      this._cache.delete(url);
+      this._cache.set(url, v);
+    }
+    return v;
+  },
+
+  put(url, areas) {
+    if (this._cache.has(url)) {
+      this._cacheBytes -= this._cacheSizes.get(url) || 0;
+      this._cacheSizes.delete(url);
+      this._cache.delete(url);
+    }
+    const bytes = frameBytes(areas);
+    this._cache.set(url, areas);
+    this._cacheSizes.set(url, bytes);
+    this._cacheBytes += bytes;
+    while (this._cacheBytes > DECODE_CACHE_BYTES) {
+      const oldest = this._cache.keys().next().value;
+      this._cacheBytes -= this._cacheSizes.get(oldest) || 0;
+      this._cacheSizes.delete(oldest);
+      this._cache.delete(oldest);
+    }
+  },
+};
+
 /* Radar grid km (CH1903 values) -> LV95 m -> WGS84 (swisstopo approximation). */
 function gridKmToLatLng(xKm, yKm) {
   const yp = (xKm * 1000 - 600000) / 1000000;
@@ -438,10 +471,6 @@ const PAUSE_SVG =
 class MeteoSwissRadarCard extends HTMLElement {
   constructor() {
     super();
-    this._cache = new Map(); // radar_url -> decoded areas
-    this._cacheSizes = new Map(); // radar_url -> byte size of that entry
-    this._cacheBytes = 0; // running total decoded bytes
-    this._cacheMax = Infinity; // entry-count ceiling; set to frames.length + 10 after manifest
     this._pending = new Map(); // radar_url -> Promise
     this._retryAfter = new Map(); // radar_url -> earliest retry timestamp (ms)
     this._frames = [];
@@ -626,9 +655,6 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._lightningMap = null;
     this._lightningVersion = null;
     this._lightningActive = false;
-    this._cache.clear();
-    this._cacheSizes.clear();
-    this._cacheBytes = 0;
     this._pending.clear();
     this._retryAfter.clear();
     this._frames = [];
@@ -1212,11 +1238,6 @@ class MeteoSwissRadarCard extends HTMLElement {
       : null;
     this._animVersion = version;
     this._frames = frames;
-    // Cap entry count at manifest size + margin; the byte budget (DECODE_CACHE_BYTES)
-    // is the primary limit, but the entry count prevents growth on abnormally large
-    // manifests. Path2D cache is deliberately NOT grown: it stays at PATH_CACHE_SIZE
-    // because _reset() clears it on every pan/zoom and rebuild is ~0.73 ms.
-    this._cacheMax = frames.length + 10;
     const measCount = frames.filter((f) => f.type === "measurement").length;
     // Positions map TIME, not frame index: the cadence is mixed (5-min
     // measurement, 5/10-min forecast), so index fractions drift off the axis.
@@ -1484,35 +1505,11 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   _cacheGet(url) {
-    const v = this._cache.get(url);
-    if (v) {
-      this._cache.delete(url);
-      this._cache.set(url, v);
-    }
-    return v;
+    return SHARED_DECODE_CACHE.get(url);
   }
 
-  _cachePut(url, v) {
-    // Remove and re-account an existing entry being overwritten.
-    if (this._cache.has(url)) {
-      this._cacheBytes -= this._cacheSizes.get(url) || 0;
-      this._cacheSizes.delete(url);
-      this._cache.delete(url);
-    }
-    const bytes = frameBytes(v);
-    this._cache.set(url, v);
-    this._cacheSizes.set(url, bytes);
-    this._cacheBytes += bytes;
-    // Evict LRU while either limit (byte budget or entry count) is exceeded.
-    while (
-      this._cache.size > this._cacheMax ||
-      this._cacheBytes > DECODE_CACHE_BYTES
-    ) {
-      const oldest = this._cache.keys().next().value;
-      this._cacheBytes -= this._cacheSizes.get(oldest) || 0;
-      this._cacheSizes.delete(oldest);
-      this._cache.delete(oldest);
-    }
+  _cachePut(url, areas) {
+    SHARED_DECODE_CACHE.put(url, areas);
   }
 
   _ensureFrame(url) {

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import vm from "node:vm";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 
 const cardPath = fileURLToPath(
   new URL(
@@ -68,14 +68,14 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -214,7 +214,7 @@ describe("teardown / rebuild lifecycle (issue #3)", () => {
       },
     };
     card._radar = {};
-    card._cache.set("a", 1);
+    SHARED_DECODE_CACHE.put("a", [{ color: "#000", verts: new Float32Array(2), rings: new Int32Array([0, 2]) }]);
     card._pending.set("a", Promise.resolve());
     card._retryAfter.set("a", 1);
 
@@ -223,7 +223,6 @@ describe("teardown / rebuild lifecycle (issue #3)", () => {
     expect(removed).toBe(true); // Leaflet listeners/tile layer released
     expect(card._map).toBe(null);
     expect(card._radar).toBe(null);
-    expect(card._cache.size).toBe(0);
     expect(card._pending.size).toBe(0);
     expect(card._retryAfter.size).toBe(0);
     expect(card._frames).toEqual([]);
@@ -486,6 +485,12 @@ describe("transient-failure recovery (issue #2)", () => {
 });
 
 describe("first-frame failure recovery (issue #5)", () => {
+  beforeEach(() => {
+    SHARED_DECODE_CACHE._cache.clear();
+    SHARED_DECODE_CACHE._cacheSizes.clear();
+    SHARED_DECODE_CACHE._cacheBytes = 0;
+  });
+
   // A bare instance with _refreshManifest stubbed so _loadData can run end-to-end
   // without real HTTP, exercising only the _dataReady / timeline visibility fix.
   function makeCard() {
@@ -774,17 +779,26 @@ describe("typed-array geometry storage (issue #14, #53)", () => {
 });
 
 describe("dynamic cache sizing (issue #14)", () => {
-  it("_cachePut evicts to _cacheMax, not the fixed constant", () => {
-    const card = new MeteoSwissRadarCard();
-    card._cacheMax = 3;
-    for (let i = 0; i < 5; i++) card._cachePut(`url-${i}`, i);
-    expect(card._cache.size).toBe(3);
-    // Most-recently inserted values survive; oldest are evicted LRU.
-    expect(card._cacheGet("url-4")).toBe(4);
-    expect(card._cacheGet("url-0")).toBeUndefined();
+  beforeEach(() => {
+    SHARED_DECODE_CACHE._cache.clear();
+    SHARED_DECODE_CACHE._cacheSizes.clear();
+    SHARED_DECODE_CACHE._cacheBytes = 0;
   });
 
-  it("_cacheMax is raised after _refreshManifest so all frames stay cached", async () => {
+  it("_cachePut with shared cache uses byte budget for eviction", () => {
+    const card = new MeteoSwissRadarCard();
+    const entry = () => [{ color: "#000", verts: new Float32Array(1000), rings: new Int32Array(100) }];
+    // Fill cache with entries until byte budget is reached
+    for (let i = 0; i < 30; i++) {
+      card._cachePut(`url-${i}`, entry());
+      if (SHARED_DECODE_CACHE._cacheBytes > DECODE_CACHE_BYTES) break;
+    }
+    // Cache contains some entries but respects the byte budget
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBeLessThanOrEqual(DECODE_CACHE_BYTES);
+    expect(SHARED_DECODE_CACHE._cache.size).toBeGreaterThan(0);
+  });
+
+  it("_refreshManifest works with shared cache", async () => {
     const card = new MeteoSwissRadarCard();
     const nFrames = 295;
     const pics = Array.from({ length: nFrames }, (_, i) => ({
@@ -816,11 +830,8 @@ describe("dynamic cache sizing (issue #14)", () => {
 
     await card._refreshManifest(true);
 
-    // Cache cap must accommodate every frame in the manifest + margin.
-    expect(card._cacheMax).toBe(nFrames + 10);
-    // Ensure a full manifest of frames can be stored without eviction.
-    for (let i = 0; i < nFrames; i++) card._cachePut(`frame-${i}`, i);
-    expect(card._cache.size).toBe(nFrames);
+    // Frames are loaded and available via cache operations
+    expect(card._frames.length).toBe(nFrames);
   });
 });
 
@@ -856,12 +867,12 @@ describe("Path2D cache cap (issue #51)", () => {
     return card;
   }
 
-  it("_pathCacheMax stays at the fixed constant regardless of manifest size", async () => {
+  it("path cache stays at the fixed constant regardless of manifest size", async () => {
     // A 291-frame manifest (the live size measured in the issue) must not
-    // inflate _pathCacheMax beyond the compile-time cap.
+    // inflate the path cache beyond the compile-time cap.
     const card = await runRefreshManifest(291);
-    // The decode cache grows to accommodate all frames.
-    expect(card._cacheMax).toBe(291 + 10);
+    // The decode cache is now shared and uses byte-based eviction, not entry-count capping.
+    expect(card._frames.length).toBe(291);
     // The path cache stays at its fixed cap — never tied to frames.length.
     // 48 is PATH_CACHE_SIZE (two window-mode loops, fixed at compile time).
     expect(card._pathCacheMax).toBeUndefined(); // lives on the RadarLayer, not the card
@@ -1195,6 +1206,12 @@ describe("byte-bounded decode cache (issue #52)", () => {
     return [{ color: "#aabbcc", verts, rings }];
   }
 
+  beforeEach(() => {
+    SHARED_DECODE_CACHE._cache.clear();
+    SHARED_DECODE_CACHE._cacheSizes.clear();
+    SHARED_DECODE_CACHE._cacheBytes = 0;
+  });
+
   it("frameBytes sums verts.byteLength and rings.byteLength for each area", () => {
     // 3 rings of 4 floats -> verts: 3*4*4=48 B, rings: (3+1)*4=16 B -> total 64 B
     expect(frameBytes(makeAreas(3, 4))).toBe(48 + 16);
@@ -1206,7 +1223,7 @@ describe("byte-bounded decode cache (issue #52)", () => {
     expect(frameBytes(undefined)).toBe(0);
   });
 
-  it("_cacheBytes tracks total bytes and decrements on eviction", () => {
+  it("shared cache tracks total bytes and decrements on eviction", () => {
     const card = new MeteoSwissRadarCard();
     // Each entry: 1 ring of 256 floats.
     // frameBytes = 256*4 + 2*4 = 1024 + 8 = 1032 bytes.
@@ -1214,12 +1231,12 @@ describe("byte-bounded decode cache (issue #52)", () => {
     const entryBytes = frameBytes(entry());
     card._cachePut("a", entry());
     card._cachePut("b", entry());
-    expect(card._cacheBytes).toBe(entryBytes * 2);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(entryBytes * 2);
 
-    // Inserting a third entry stays under the byte budget but entry count is fine.
+    // Inserting a third entry stays under the byte budget.
     card._cachePut("c", entry());
-    expect(card._cache.size).toBe(3);
-    expect(card._cacheBytes).toBe(entryBytes * 3);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(3);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(entryBytes * 3);
   });
 
   it("evicts LRU entries when byte budget is exceeded", () => {
@@ -1246,20 +1263,19 @@ describe("byte-bounded decode cache (issue #52)", () => {
     card._cachePut("u1", entry());
     card._cachePut("u2", entry());
     card._cachePut("u3", entry()); // now at budget exactly (4 * quarter = 1 * budget)
-    expect(card._cacheBytes).toBe(DECODE_CACHE_BYTES);
-    expect(card._cache.size).toBe(4);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(DECODE_CACHE_BYTES);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(4);
 
     // Adding a 5th entry must evict the oldest (u0) to stay under budget.
     card._cachePut("u4", entry());
-    expect(card._cache.size).toBe(4);
-    expect(card._cacheBytes).toBe(DECODE_CACHE_BYTES);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(4);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(DECODE_CACHE_BYTES);
     expect(card._cacheGet("u0")).toBeUndefined(); // evicted
     expect(card._cacheGet("u4")).toBeDefined(); // kept
   });
 
   it("light manifest (all measurement frames) stays fully cached without eviction", () => {
     const card = new MeteoSwissRadarCard();
-    card._cacheMax = 100;
 
     // Simulate 80 light frames at ~1 KB each.
     const floats = 256; // 256 floats = 1024 bytes of verts
@@ -1274,8 +1290,8 @@ describe("byte-bounded decode cache (issue #52)", () => {
     for (let i = 0; i < 80; i++) card._cachePut(`frame-${i}`, entry());
 
     // 80 * entryBytes << 24 MB -> no eviction.
-    expect(card._cache.size).toBe(80);
-    expect(card._cacheBytes).toBe(80 * entryBytes);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(80);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(80 * entryBytes);
     expect(card._cacheGet("frame-0")).toBeDefined();
   });
 
@@ -1293,40 +1309,37 @@ describe("byte-bounded decode cache (issue #52)", () => {
 
     for (let i = 0; i < 300; i++) card._cachePut(`frame-${i}`, entry());
 
-    expect(card._cacheBytes).toBeLessThanOrEqual(DECODE_CACHE_BYTES);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBeLessThanOrEqual(DECODE_CACHE_BYTES);
     // Should have some entries (the most recent ones).
-    expect(card._cache.size).toBeGreaterThan(0);
+    expect(SHARED_DECODE_CACHE._cache.size).toBeGreaterThan(0);
     // The oldest entries must have been evicted.
     expect(card._cacheGet("frame-0")).toBeUndefined();
   });
 
-  it("_teardown resets _cacheBytes and _cacheSizes", () => {
-    const card = new MeteoSwissRadarCard();
+  it("shared cache persists across card instances", () => {
+    const card1 = new MeteoSwissRadarCard();
     const entry = () => makeAreas(1, 256);
-    card._cachePut("x", entry());
-    expect(card._cacheBytes).toBeGreaterThan(0);
+    card1._cachePut("shared", entry());
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBeGreaterThan(0);
 
-    card._initialized = true;
-    card._map = { remove() {} };
-    card._teardown();
-
-    expect(card._cacheBytes).toBe(0);
-    expect(card._cacheSizes.size).toBe(0);
+    // A new card instance can access the same cache entry
+    const card2 = new MeteoSwissRadarCard();
+    expect(card2._cacheGet("shared")).toBeDefined();
   });
 
-  it("overwriting a cached URL keeps _cacheBytes accurate", () => {
+  it("overwriting a cached URL keeps shared cache bytes accurate", () => {
     const card = new MeteoSwissRadarCard();
     // First write: 2 rings of 4 floats.
     const first = makeAreas(2, 4);
     const firstBytes = frameBytes(first);
     card._cachePut("url", first);
-    expect(card._cacheBytes).toBe(firstBytes);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(firstBytes);
     // Overwrite with a different geometry; size may differ.
     const second = makeAreas(1, 8);
     const secondBytes = frameBytes(second);
     card._cachePut("url", second);
-    expect(card._cache.size).toBe(1);
-    expect(card._cacheBytes).toBe(secondBytes);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(1);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(secondBytes);
   });
 });
 
