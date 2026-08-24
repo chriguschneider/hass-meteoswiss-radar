@@ -8,6 +8,7 @@ imports resolve to lightweight stubs.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType
@@ -121,10 +122,12 @@ for _name, _mod in _STUBS.items():
 
 # Import after stubs are in place.
 from custom_components.meteoswiss_radar import (  # noqa: E402
+    MeteoSwissRadarCardView,
     MeteoSwissRadarProxyView,
     MeteoSwissRadarVendorView,
     _LRU_MAX,
     _MAX_BODY_BYTES,
+    _UPSTREAM_TIMEOUT,
     _VERSIONS_TTL,
     async_setup_entry,
     async_unload_entry,
@@ -182,7 +185,12 @@ def _counting_upstream(
     body: bytes = b"{}",
     delay: bool = False,
 ) -> tuple[object, list]:
-    """Upstream mock that records the number of times it was called."""
+    """Upstream mock that records each call as (args, kwargs).
+
+    len(calls) gives the call count; calls[i] gives the positional and keyword
+    arguments passed to session.get for the i-th call, enabling assertions on
+    the upstream URL, allow_redirects, and timeout (issue #77).
+    """
     calls: list = []
 
     class _FakeContent:
@@ -191,7 +199,7 @@ def _counting_upstream(
 
     @asynccontextmanager
     async def _cm(*_a, **_kw):
-        calls.append(1)
+        calls.append((_a, _kw))
         if delay:
             await asyncio.sleep(0)  # yield so a second coroutine can start
         resp = MagicMock()
@@ -940,3 +948,98 @@ def test_config_flow_aborts_on_second_instance() -> None:
 
     result = _run(flow.async_step_user())
     assert result == {"type": "abort", "reason": "single_instance_allowed"}
+
+
+# ---------------------------------------------------------------------------
+# Tests: upstream request arguments (issue #77)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tail", [
+    _VERSIONS_TAIL,
+    _ANIMATION_TAIL,
+    _RADAR_TAIL,
+    _INCA_TAIL,
+])
+def test_upstream_request_uses_correct_url_redirects_and_timeout(tail: str) -> None:
+    """session.get must be called with the full upstream URL, allow_redirects=False,
+    and the module-level timeout object — so removing any of those three args would
+    be caught by the test suite (issue #77).
+    """
+    session, calls = _counting_upstream()
+    v = _view()
+    _inject_session(v, session)
+    resp = _get(v, tail)
+    assert resp.status == 200
+    assert len(calls) == 1
+
+    args, kwargs = calls[0]
+    expected_url = f"https://www.meteoschweiz.admin.ch/{tail}"
+    assert args == (expected_url,), f"wrong positional args to session.get: {args!r}"
+    assert kwargs.get("allow_redirects") is False, (
+        "allow_redirects=False must be passed; 3xx hardening depends on it"
+    )
+    assert kwargs.get("timeout") is _UPSTREAM_TIMEOUT, (
+        "module-level _UPSTREAM_TIMEOUT must be passed to session.get"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: MeteoSwissRadarCardView (issue #77)
+# ---------------------------------------------------------------------------
+
+def _card_view() -> MeteoSwissRadarCardView:
+    return MeteoSwissRadarCardView()
+
+
+def _get_card(view: MeteoSwissRadarCardView) -> _FakeResponse | _FakeFileResponse:
+    request = MagicMock()
+    return _run(view.get(request))
+
+
+def test_card_view_no_cache_header() -> None:
+    """Successful card response must carry Cache-Control: no-cache."""
+    resp = _get_card(_card_view())
+    assert resp.status == 200
+    assert isinstance(resp, _FakeFileResponse)
+    assert resp._explicit_headers.get("Cache-Control") == "no-cache"
+
+
+def test_card_view_missing_file_returns_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the card file is absent on disk, the view must return 404."""
+    monkeypatch.setattr(pathlib.Path, "is_file", lambda self: False)
+    resp = _get_card(_card_view())
+    assert resp.status == 404
+    assert not isinstance(resp, _FakeFileResponse)
+
+
+# ---------------------------------------------------------------------------
+# Tests: async_unload_entry (issue #77)
+# ---------------------------------------------------------------------------
+
+def test_async_unload_entry_returns_true() -> None:
+    """async_unload_entry must return True."""
+    hass = MagicMock()
+    hass.data = {}
+    entry = MagicMock()
+    result = _run(async_unload_entry(hass, entry))
+    assert result is True
+
+
+def test_async_unload_entry_removes_card_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """async_unload_entry must remove the card's extra-JS URL exactly once."""
+    removed: list[str] = []
+    monkeypatch.setattr(
+        _integration, "remove_extra_js_url", lambda hass, url: removed.append(url)
+    )
+    hass = MagicMock()
+    hass.data = {_integration.DOMAIN: True}
+    entry = MagicMock()
+
+    _run(async_unload_entry(hass, entry))
+
+    assert removed == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
+    assert _integration.DOMAIN not in hass.data
