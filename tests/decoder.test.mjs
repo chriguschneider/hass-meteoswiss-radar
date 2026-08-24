@@ -3283,17 +3283,19 @@ describe("_pruneRetryAfter expiration pruning (issue #81)", () => {
     expect(card._retryAfter.has("at-now")).toBe(false);
   });
 
-  it("keeps an entry slightly in the future (1ms ahead)", () => {
+  it("keeps an entry in the future (not expired)", () => {
     const card = makeCard();
     const now = Date.now();
-    // Add an entry just slightly in the future (1ms ahead).
-    card._retryAfter.set("just-future", now + 1);
+    // Comfortably in the future: _pruneRetryAfter re-reads Date.now() at
+    // prune time, so a 1ms margin can race the map-population loop and get
+    // pruned. Use a wide margin to test "future entries are kept" reliably.
+    card._retryAfter.set("just-future", now + 60000);
     for (let i = 0; i < 130; i++) {
       card._retryAfter.set(`filler-${i}`, now - 1000); // expired
     }
     expect(card._retryAfter.size).toBe(131);
     card._pruneRetryAfter();
-    // just-future must be kept because now + 1 > now (not expired).
+    // just-future must be kept because it is past 'now' (not expired).
     expect(card._retryAfter.has("just-future")).toBe(true);
   });
 });
