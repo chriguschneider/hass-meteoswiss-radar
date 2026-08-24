@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/blob/master/LICENSE)
 [![GitHub Release](https://img.shields.io/github/release/chriguschneider/hass-meteoswiss-radar.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/releases)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master)](https://github.com/chriguschneider/hass-meteoswiss-radar/actions)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=chriguschneider_hass-meteoswiss-radar&metric=alert_status)](https://sonarcloud.io/summary/overall?id=chriguschneider_hass-meteoswiss-radar&branch=master)
 [![hacs](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
 
 MeteoSwiss precipitation radar for Home Assistant: a custom integration that

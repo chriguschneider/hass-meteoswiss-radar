@@ -13,6 +13,7 @@ venv/
 # Node / test tooling
 node_modules/
 npm-debug.log*
+coverage/
 
 # Generated brands icon set (trademarked logo; lives in the brands PR,
 # not this repo's history). See scripts/generate_brands_icon.py.
