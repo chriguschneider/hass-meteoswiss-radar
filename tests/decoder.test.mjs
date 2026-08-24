@@ -85,14 +85,14 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef: window };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef: window };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -506,6 +506,8 @@ describe("first-frame failure recovery (issue #5)", () => {
     SHARED_DECODE_CACHE._cache.clear();
     SHARED_DECODE_CACHE._cacheSizes.clear();
     SHARED_DECODE_CACHE._cacheBytes = 0;
+    SHARED_DECODE_CACHE._cards = 0;
+    SHARED_DECODE_CACHE._products = 0;
   });
 
   // A bare instance with _refreshManifest stubbed so _loadData can run end-to-end
@@ -800,6 +802,8 @@ describe("dynamic cache sizing (issue #14)", () => {
     SHARED_DECODE_CACHE._cache.clear();
     SHARED_DECODE_CACHE._cacheSizes.clear();
     SHARED_DECODE_CACHE._cacheBytes = 0;
+    SHARED_DECODE_CACHE._cards = 0;
+    SHARED_DECODE_CACHE._products = 0;
   });
 
   it("_cachePut with shared cache uses byte budget for eviction", () => {
@@ -1227,6 +1231,8 @@ describe("byte-bounded decode cache (issue #52)", () => {
     SHARED_DECODE_CACHE._cache.clear();
     SHARED_DECODE_CACHE._cacheSizes.clear();
     SHARED_DECODE_CACHE._cacheBytes = 0;
+    SHARED_DECODE_CACHE._cards = 0;
+    SHARED_DECODE_CACHE._products = 0;
   });
 
   it("frameBytes sums verts.byteLength and rings.byteLength for each area", () => {
@@ -1357,6 +1363,144 @@ describe("byte-bounded decode cache (issue #52)", () => {
     card._cachePut("url", second);
     expect(SHARED_DECODE_CACHE._cache.size).toBe(1);
     expect(SHARED_DECODE_CACHE._cacheBytes).toBe(secondBytes);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Shared cache: budget scaling, key-count cap, teardown release (issue #139)
+// --------------------------------------------------------------------------
+describe("shared decode cache: budget, key cap, teardown (issue #139)", () => {
+  function makeSizedEntry(bytes) {
+    // Produce an areas array whose frameBytes() equals `bytes`.
+    // frameBytes = verts.byteLength + rings.byteLength = floats*4 + 2*4
+    // => floats = (bytes - 8) / 4  (1 ring, sentinel)
+    const floats = Math.max(0, (bytes - 8) / 4);
+    const verts = new Float32Array(floats);
+    const rings = new Int32Array(2);
+    rings[1] = verts.length;
+    return [{ color: "#aabbcc", verts, rings }];
+  }
+
+  beforeEach(() => {
+    SHARED_DECODE_CACHE._cache.clear();
+    SHARED_DECODE_CACHE._cacheSizes.clear();
+    SHARED_DECODE_CACHE._cacheBytes = 0;
+    SHARED_DECODE_CACHE._cards = 0;
+    SHARED_DECODE_CACHE._products = 0;
+  });
+
+  it("byte budget scales with registered product count", () => {
+    // With no registrations: 1 product slot.
+    expect(SHARED_DECODE_CACHE._maxBytes()).toBe(DECODE_CACHE_BYTES);
+    // After attach(3): rate + 2 overlays → 3× budget.
+    SHARED_DECODE_CACHE.attach(3);
+    expect(SHARED_DECODE_CACHE._maxBytes()).toBe(DECODE_CACHE_BYTES * 3);
+    SHARED_DECODE_CACHE.detach(3); // cleanup
+  });
+
+  it("key-count cap evicts zero-byte entries that byte eviction ignores", () => {
+    // Zero-byte frames (empty overlay season): frameBytes = 0 → no byte eviction.
+    // The key cap must still rotate them out.
+    const maxKeys = SHARED_DECODE_CACHE._maxKeys(); // 360 with no registrations
+    // Insert maxKeys + 1 zero-byte entries.
+    for (let i = 0; i <= maxKeys; i++) {
+      SHARED_DECODE_CACHE.put(`zero-${i}`, []);  // [] → frameBytes = 0
+    }
+    expect(SHARED_DECODE_CACHE._cache.size).toBeLessThanOrEqual(maxKeys);
+    // Bytes should still be zero (all entries are zero-byte).
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(0);
+    // Oldest entry must have been evicted.
+    expect(SHARED_DECODE_CACHE.get("zero-0")).toBeUndefined();
+  });
+
+  it("key-count cap scales with registered products", () => {
+    SHARED_DECODE_CACHE.attach(4); // rate + 3 overlays
+    expect(SHARED_DECODE_CACHE._maxKeys()).toBe(DECODE_CACHE_MAX_KEYS * 4);
+    SHARED_DECODE_CACHE.detach(4);
+  });
+
+  it("attach/detach increments and decrements counters correctly", () => {
+    SHARED_DECODE_CACHE.attach(2);
+    expect(SHARED_DECODE_CACHE._cards).toBe(1);
+    expect(SHARED_DECODE_CACHE._products).toBe(2);
+    SHARED_DECODE_CACHE.attach(3);
+    expect(SHARED_DECODE_CACHE._cards).toBe(2);
+    expect(SHARED_DECODE_CACHE._products).toBe(5);
+    SHARED_DECODE_CACHE.detach(2);
+    expect(SHARED_DECODE_CACHE._cards).toBe(1);
+    expect(SHARED_DECODE_CACHE._products).toBe(3);
+  });
+
+  it("detach of last card clears the cache", () => {
+    SHARED_DECODE_CACHE.attach(1);
+    SHARED_DECODE_CACHE.put("frame-a", makeSizedEntry(1024));
+    SHARED_DECODE_CACHE.put("frame-b", makeSizedEntry(2048));
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(2);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBeGreaterThan(0);
+
+    SHARED_DECODE_CACHE.detach(1); // last card gone
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(0);
+    expect(SHARED_DECODE_CACHE._cacheBytes).toBe(0);
+    expect(SHARED_DECODE_CACHE._cards).toBe(0);
+  });
+
+  it("detach of non-last card does NOT clear the cache", () => {
+    SHARED_DECODE_CACHE.attach(1);
+    SHARED_DECODE_CACHE.attach(1);
+    SHARED_DECODE_CACHE.put("frame-a", makeSizedEntry(1024));
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(1);
+
+    SHARED_DECODE_CACHE.detach(1); // first card gone, second still alive
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(1); // cache preserved
+    expect(SHARED_DECODE_CACHE._cards).toBe(1);
+
+    SHARED_DECODE_CACHE.detach(1); // last card gone
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(0);
+  });
+
+  it("_teardown deregisters from shared cache; last card clears it", () => {
+    const card = new MeteoSwissRadarCard();
+    card._initialized = true;
+    card._cacheProducts = 1; // simulate a card that attached with 1 product
+    SHARED_DECODE_CACHE._cards = 1;
+    SHARED_DECODE_CACHE._products = 1;
+    SHARED_DECODE_CACHE.put("frame-x", makeSizedEntry(1024));
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(1);
+
+    card._map = { remove() {} };
+    card._teardown();
+
+    expect(card._cacheProducts).toBe(0);
+    expect(SHARED_DECODE_CACHE._cards).toBe(0);
+    expect(SHARED_DECODE_CACHE._cache.size).toBe(0); // cleared by last detach
+  });
+
+  it("_teardown with _cacheProducts=0 does not corrupt cache counters", () => {
+    // Card that never went through _maybeInit (e.g. failed immediately).
+    const card = new MeteoSwissRadarCard();
+    card._initialized = true;
+    // _cacheProducts defaults to 0 — attach was never called.
+    SHARED_DECODE_CACHE._cards = 0;
+    SHARED_DECODE_CACHE._products = 0;
+
+    card._map = { remove() {} };
+    card._teardown();
+
+    // Must not go negative.
+    expect(SHARED_DECODE_CACHE._cards).toBe(0);
+    expect(SHARED_DECODE_CACHE._products).toBe(0);
+  });
+
+  it("_countActiveProducts returns 1 for rate-only config", () => {
+    const card = new MeteoSwissRadarCard();
+    card._config = {};
+    expect(card._countActiveProducts()).toBe(1);
+  });
+
+  it("_countActiveProducts counts each enabled overlay", () => {
+    const card = new MeteoSwissRadarCard();
+    card._config = { layer_snow: true, layer_snowrain: true, layer_freezing_rain: true };
+    expect(card._countActiveProducts()).toBe(4); // rate + 3 overlays
   });
 });
 
