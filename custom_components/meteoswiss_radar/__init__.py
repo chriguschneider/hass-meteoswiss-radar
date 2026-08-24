@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import gzip
 import logging
 import re
 import time
@@ -84,8 +85,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         # TTL cache for versions.json: (monotonic_time, body) or None.
         self._versions_cache: tuple[float, bytes] | None = None
         # LRU for immutable frames (animation manifest + radar/inca frames).
-        self._lru: collections.OrderedDict[str, bytes] = collections.OrderedDict()
-        # LRU byte tracking: total bytes and per-entry sizes.
+        # Each entry stores (raw_body, gzipped_body) to compress once at
+        # cache-put and serve pre-compressed when Accept-Encoding allows (#74).
+        self._lru: collections.OrderedDict[
+            str, tuple[bytes, bytes]
+        ] = collections.OrderedDict()
+        # LRU byte tracking: total bytes (raw + gzipped) and per-entry sizes.
         self._lru_bytes = 0
         self._lru_sizes: dict[str, int] = {}
         # In-flight tasks: tail → Task[(int, bytes|None)] deduplicates
@@ -102,12 +107,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         # Join an existing in-flight fetch rather than opening a second upstream.
         if tail in self._inflight:
             status, body = await asyncio.shield(self._inflight[tail])
-            return self._build_response(tail, status, body)
+            return self._build_response(tail, status, body, request)
 
         # Cache hit: no upstream request needed.
         cached = self._cache_get(tail)
         if cached is not None:
-            return self._build_response(tail, 200, cached)
+            return self._build_response(tail, 200, cached, request)
 
         # Cache miss: run the fetch as a detached task so it survives leader
         # cancellation (issue #69). The leader and any joiners all shield the
@@ -119,13 +124,13 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         task.add_done_callback(lambda _t: self._inflight.pop(tail, None))
 
         status, body = await asyncio.shield(task)
-        return self._build_response(tail, status, body)
+        return self._build_response(tail, status, body, request)
 
     # ------------------------------------------------------------------
     # Cache
     # ------------------------------------------------------------------
 
-    def _cache_get(self, tail: str) -> bytes | None:
+    def _cache_get(self, tail: str) -> tuple[bytes, bytes] | bytes | None:
         if tail.endswith("versions.json"):
             if self._versions_cache is not None:
                 ts, body = self._versions_cache
@@ -146,15 +151,20 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
                 self._lru_bytes -= self._lru_sizes.get(tail, 0)
                 self._lru_sizes.pop(tail, None)
                 self._lru.pop(tail, None)
-            # Add the new entry and track its bytes.
-            body_bytes = len(body)
-            self._lru[tail] = body
-            self._lru_sizes[tail] = body_bytes
-            self._lru_bytes += body_bytes
+            # Compress once at cache-put; store (raw, gzipped) tuple.
+            # Clients that accept gzip get pre-compressed body without per-hit
+            # recompression (issue #74).
+            gzipped_body = gzip.compress(body)
+            entry = (body, gzipped_body)
+            self._lru[tail] = entry
+            # Track total bytes for both raw and gzipped versions.
+            entry_bytes = len(body) + len(gzipped_body)
+            self._lru_sizes[tail] = entry_bytes
+            self._lru_bytes += entry_bytes
             self._lru.move_to_end(tail)
             # Evict LRU while byte budget is exceeded.
             while self._lru_bytes > _LRU_MAX_BYTES:
-                oldest_tail, oldest_body = self._lru.popitem(last=False)
+                oldest_tail, _oldest_entry = self._lru.popitem(last=False)
                 self._lru_bytes -= self._lru_sizes.pop(oldest_tail, 0)
 
     # ------------------------------------------------------------------
@@ -232,7 +242,11 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
     # ------------------------------------------------------------------
 
     def _build_response(
-        self, tail: str, status: int, body: bytes | None
+        self,
+        tail: str,
+        status: int,
+        body: bytes | tuple[bytes, bytes] | None,
+        request: web.Request,
     ) -> web.Response:
         if status != 200 or body is None:
             return web.Response(status=status)
@@ -244,13 +258,34 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             if tail.endswith("versions.json")
             else "private, max-age=86400, immutable"
         )
+        # For LRU entries, body is (raw, gzipped); check Accept-Encoding to
+        # serve pre-compressed without per-hit recompression (issue #74).
+        headers: dict[str, str] = {"Cache-Control": cache}
+        response_body: bytes
+        if isinstance(body, tuple):
+            raw_body, gzipped_body = body
+            # If client accepts gzip, serve pre-compressed body directly.
+            accept_encoding = request.headers.get("Accept-Encoding", "")
+            if "gzip" in accept_encoding:
+                response_body = gzipped_body
+                headers["Content-Encoding"] = "gzip"
+            else:
+                response_body = raw_body
+        else:
+            # versions.json is not tuple; serve as-is without recompression.
+            response_body = body
+
         resp = web.Response(
-            body=body,
+            body=response_body,
             content_type="application/json",
             charset="utf-8",
-            headers={"Cache-Control": cache},
+            headers=headers,
         )
-        resp.enable_compression()
+        # Only enable compression for non-LRU responses (versions.json) or when
+        # we didn't already serve pre-gzipped content.
+        accept_encoding = request.headers.get("Accept-Encoding", "")
+        if not isinstance(body, tuple) or "gzip" not in accept_encoding:
+            resp.enable_compression()
         return resp
 
 
