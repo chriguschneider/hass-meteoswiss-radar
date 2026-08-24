@@ -81,3 +81,32 @@ def test_decode_frame_hand_computed_vertex() -> None:
     first_ring = decoded[0]["shapes"][0][0]
     assert first_ring[0] == expected_lat
     assert first_ring[1] == expected_lng
+
+
+def test_decode_snow_frame_empty() -> None:
+    """Empty snow frame (no areas) decodes to an empty array.
+
+    Verified live 2026-08-24: in August, snow overlay frames have no contours.
+    The empty areas array must decode to an empty result.
+    """
+    frame = json.loads((FIXTURES / "snow_frame_empty.json").read_text(encoding="utf-8"))
+    expected = json.loads(
+        (FIXTURES / "snow_frame_empty_decoded.json").read_text(encoding="utf-8")
+    )
+    assert decode_frame(frame) == expected
+
+
+def test_decode_snow_frame_synthetic() -> None:
+    """Synthetic snow frame with one area decodes correctly.
+
+    Fixture uses the snow legend color (#C1DDDC) and a small contour
+    on the real 710x640 grid to verify the decoder works for snow overlays
+    the same as for rate and other precipitation layers.
+    """
+    frame = json.loads(
+        (FIXTURES / "snow_frame_synthetic.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (FIXTURES / "snow_frame_synthetic_decoded.json").read_text(encoding="utf-8")
+    )
+    assert decode_frame(frame) == expected
