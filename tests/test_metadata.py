@@ -40,17 +40,31 @@ def _package_version() -> str:
     return json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 
 
+def _package_lock_versions() -> tuple[str, str]:
+    """Return (top-level version, packages[""] version) from package-lock.json."""
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    return lock["version"], lock["packages"][""]["version"]
+
+
 def test_versions_are_in_sync() -> None:
-    """All four version strings must move together.
+    """All version strings must move together.
 
     package.json was left out of this check until #64 and had silently drifted
     a patch release behind, so `npm test` printed a version the card did not
-    ship as. Every file that carries the version belongs here, or it drifts.
+    ship as. package-lock.json was left out until #78 and drifted the same way.
+    Every file that carries the version belongs here, or it drifts.
     """
     manifest_version = _manifest()["version"]
     assert _const_version() == manifest_version, "const.py VERSION out of sync"
     assert _card_version() == manifest_version, "card CARD_VERSION out of sync"
     assert _package_version() == manifest_version, "package.json version out of sync"
+    lock_top, lock_pkg = _package_lock_versions()
+    assert lock_top == manifest_version, (
+        "package-lock.json top-level version out of sync"
+    )
+    assert lock_pkg == manifest_version, (
+        'package-lock.json packages[""] version out of sync'
+    )
 
 
 def test_manifest_has_required_keys() -> None:
