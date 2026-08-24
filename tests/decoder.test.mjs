@@ -3080,3 +3080,220 @@ describe("strikesForFrame (issue #93)", () => {
     expect(lng).toBeLessThan(11);
   });
 });
+
+describe("legacy autoplay compat (issue #81)", () => {
+  it("setConfig({autoplay: true}) yields autoplay_mode='full'", () => {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({ autoplay: true });
+    expect(card._config.autoplay_mode).toBe("full");
+  });
+
+  it("setConfig({autoplay: true, autoplay_mode: 'window'}) keeps autoplay_mode='window'", () => {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({ autoplay: true, autoplay_mode: "window" });
+    expect(card._config.autoplay_mode).toBe("window");
+  });
+
+  it("setConfig without autoplay leaves autoplay_mode at default 'off'", () => {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({});
+    expect(card._config.autoplay_mode).toBe("off");
+  });
+});
+
+describe("_is404 heuristics (issue #81)", () => {
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    return card;
+  }
+
+  it("matches status_code: 404", () => {
+    const card = makeCard();
+    expect(card._is404({ status_code: 404 })).toBe(true);
+  });
+
+  it("matches code: 404", () => {
+    const card = makeCard();
+    expect(card._is404({ code: 404 })).toBe(true);
+  });
+
+  it("matches message with /404/ regex", () => {
+    const card = makeCard();
+    expect(card._is404({ message: "not found 404" })).toBe(true);
+  });
+
+  it("matches error with /404/ regex", () => {
+    const card = makeCard();
+    expect(card._is404({ error: "404 error" })).toBe(true);
+  });
+
+  it("does not match '5040 bytes' (false positive probe)", () => {
+    const card = makeCard();
+    expect(card._is404({ message: "5040 bytes" })).toBe(false);
+  });
+
+  it("does not match '4004' (false positive probe: 4-0-0-4 without consecutive 404)", () => {
+    const card = makeCard();
+    expect(card._is404({ message: "4004" })).toBe(false);
+  });
+
+  it("does not match HTTP 401 error", () => {
+    const card = makeCard();
+    expect(card._is404({ error: "HTTP 401" })).toBe(false);
+  });
+
+  it("does not match exit code 0", () => {
+    const card = makeCard();
+    expect(card._is404({ message: "Process finished with code 0" })).toBe(false);
+  });
+
+  it("returns false for null error", () => {
+    const card = makeCard();
+    expect(card._is404(null)).toBe(false);
+  });
+
+  it("returns false for undefined error", () => {
+    const card = makeCard();
+    expect(card._is404(undefined)).toBe(false);
+  });
+
+  it("returns false for empty object", () => {
+    const card = makeCard();
+    expect(card._is404({})).toBe(false);
+  });
+
+  it("returns false for empty message string", () => {
+    const card = makeCard();
+    expect(card._is404({ message: "" })).toBe(false);
+  });
+});
+
+describe("_refreshAfter404 60-second throttle (issue #81)", () => {
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._refreshed = 0;
+    card._lastManifest404Refresh = 0;
+    card._refreshManifest = async () => {
+      card._refreshed++;
+    };
+    return card;
+  }
+
+  it("calls _refreshManifest on first 404 refresh", async () => {
+    const card = makeCard();
+    card._lastManifest404Refresh = 0;
+    await card._refreshAfter404();
+    expect(card._refreshed).toBe(1);
+  });
+
+  it("throttles to one call within 60 seconds", async () => {
+    const card = makeCard();
+    const now = Date.now();
+    card._lastManifest404Refresh = now - 30000; // 30s ago
+    await card._refreshAfter404();
+    // Within the 60s window: must not call
+    expect(card._refreshed).toBe(0);
+  });
+
+  it("allows a second call after 60 seconds have passed", async () => {
+    const card = makeCard();
+    const now = Date.now();
+    card._lastManifest404Refresh = now - 61000; // 61s ago
+    await card._refreshAfter404();
+    expect(card._refreshed).toBe(1);
+  });
+
+  it("updates _lastManifest404Refresh on each successful call", async () => {
+    const card = makeCard();
+    const before = Date.now();
+    await card._refreshAfter404();
+    const after = Date.now();
+    expect(card._lastManifest404Refresh).toBeGreaterThanOrEqual(before);
+    expect(card._lastManifest404Refresh).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("_pruneRetryAfter expiration pruning (issue #81)", () => {
+  function makeCard() {
+    const card = new MeteoSwissRadarCard();
+    card._retryAfter = new Map();
+    return card;
+  }
+
+  it("prunes expired (past) entries when size > 128", () => {
+    const card = makeCard();
+    const now = Date.now();
+    // Add 130 entries: 65 expired, 65 future
+    for (let i = 0; i < 65; i++) {
+      card._retryAfter.set(`expired-${i}`, now - 1000); // 1s in the past
+    }
+    for (let i = 0; i < 65; i++) {
+      card._retryAfter.set(`future-${i}`, now + 60000); // 1 min in the future
+    }
+    expect(card._retryAfter.size).toBe(130);
+    card._pruneRetryAfter();
+    // Expired entries removed, future entries kept.
+    expect(card._retryAfter.size).toBe(65);
+    for (let i = 0; i < 65; i++) {
+      expect(card._retryAfter.has(`expired-${i}`)).toBe(false);
+      expect(card._retryAfter.has(`future-${i}`)).toBe(true);
+    }
+  });
+
+  it("does nothing when size <= 128", () => {
+    const card = makeCard();
+    const now = Date.now();
+    for (let i = 0; i < 100; i++) {
+      card._retryAfter.set(`entry-${i}`, now - 1000); // all expired
+    }
+    expect(card._retryAfter.size).toBe(100);
+    card._pruneRetryAfter();
+    // Under the 128 threshold: no pruning happens, expired entries stay.
+    expect(card._retryAfter.size).toBe(100);
+  });
+
+  it("keeps only future (non-expired) entries", () => {
+    const card = makeCard();
+    const now = Date.now();
+    // Fill to 129 (just over threshold).
+    for (let i = 0; i < 64; i++) {
+      card._retryAfter.set(`expired-${i}`, now - 1000);
+    }
+    for (let i = 0; i < 65; i++) {
+      card._retryAfter.set(`future-${i}`, now + 60000);
+    }
+    card._pruneRetryAfter();
+    // Only future entries remain.
+    for (let i = 0; i < 65; i++) {
+      expect(card._retryAfter.has(`future-${i}`)).toBe(true);
+    }
+  });
+
+  it("prunes an entry at exactly the current time (boundary: t <= now deletes)", () => {
+    const card = makeCard();
+    const now = Date.now();
+    // Add entries at exactly 'now' (boundary case where t == now).
+    card._retryAfter.set("at-now", now);
+    for (let i = 0; i < 130; i++) {
+      card._retryAfter.set(`filler-${i}`, now - 1000); // expired
+    }
+    expect(card._retryAfter.size).toBe(131);
+    card._pruneRetryAfter();
+    // at-now must be deleted because t <= now is true when t == now.
+    expect(card._retryAfter.has("at-now")).toBe(false);
+  });
+
+  it("keeps an entry slightly in the future (1ms ahead)", () => {
+    const card = makeCard();
+    const now = Date.now();
+    // Add an entry just slightly in the future (1ms ahead).
+    card._retryAfter.set("just-future", now + 1);
+    for (let i = 0; i < 130; i++) {
+      card._retryAfter.set(`filler-${i}`, now - 1000); // expired
+    }
+    expect(card._retryAfter.size).toBe(131);
+    card._pruneRetryAfter();
+    // just-future must be kept because now + 1 > now (not expired).
+    expect(card._retryAfter.has("just-future")).toBe(true);
+  });
+});
