@@ -67,6 +67,12 @@ function loadDecoder() {
       }
     },
     console: { info: noop, warn: noop, error: noop },
+    // Capture rAF callbacks so tests can fire them deterministically instead of
+    // relying on a real animation frame (the card schedules invalidateSize here).
+    requestAnimationFrame: (cb) => {
+      (ctx.window.__rafCbs || (ctx.window.__rafCbs = [])).push(cb);
+      return ctx.window.__rafCbs.length;
+    },
     setTimeout,
     clearTimeout,
     Promise,
@@ -92,7 +98,7 @@ function loadDecoder() {
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -2611,63 +2617,55 @@ describe("async-init teardown race (issue #68)", () => {
 
   it("stylesheet-load callback and rAF in _createMap do not throw when map is torn down (issue #140)", () => {
     const card = makeCard();
+    // Drive the REAL _createMap (makeCard stubs it out) so we exercise the
+    // actual link-load and rAF closures, not a copy.
+    delete card._createMap;
+    card._config = { ...card._config, center: [46.8, 8.2], zoom: 7 };
+    card._hass = { config: { latitude: 46.8, longitude: 8.2 } };
+    // _teardown only nulls _map when the card is initialized.
+    card._initialized = true;
 
-    // Track whether the callbacks threw.
-    let callbackThrewError = false;
-    let rafCallbackThrewError = false;
+    let invalidateCalls = 0;
+    const mapStub = { invalidateSize() { invalidateCalls++; }, remove() {} };
+    const layer = { addTo() { return this; } };
+    const L = {
+      map: () => mapStub,
+      tileLayer: () => layer,
+      marker: () => layer,
+      divIcon: () => ({}),
+      Layer: { extend: () => class { addTo() { return this; } } },
+    };
 
-    // _createMap will call link.addEventListener and requestAnimationFrame.
-    // Stub them to capture the callbacks.
-    let stylesheetLoadCallback = null;
-    const origShadowRoot = card.shadowRoot;
+    // Capture the stylesheet "load" handler the card registers.
+    let loadHandler = null;
     card.shadowRoot = {
-      ...origShadowRoot,
-      querySelector: (sel) => {
-        if (sel === "link") {
-          return {
-            addEventListener(event, handler) {
-              if (event === "load") {
-                stylesheetLoadCallback = handler;
-              }
-            },
-          };
-        }
-        return origShadowRoot.querySelector(sel);
-      },
+      getElementById: () => ({}),
+      querySelector: (sel) =>
+        sel === "link"
+          ? { addEventListener: (ev, h) => { if (ev === "load") loadHandler = h; } }
+          : null,
     };
 
-    // Capture the rAF callback.
-    let rafCallback = null;
-    const origRaf = globalThis.requestAnimationFrame;
-    globalThis.requestAnimationFrame = (cb) => {
-      rafCallback = cb;
-    };
+    // The vm-context requestAnimationFrame stub records callbacks here.
+    windowRef.__rafCbs = [];
+    card._createMap(L);
+    const rafHandler = windowRef.__rafCbs[0];
 
-    // Create the map (this sets up the callbacks).
-    card._createMap({});
+    // Guard against a vacuous test: both closures must actually have been set up.
+    expect(typeof loadHandler).toBe("function");
+    expect(typeof rafHandler).toBe("function");
 
-    // Simulate teardown: null out the map.
+    // While the map is live, both closures recalc the map size.
+    loadHandler();
+    rafHandler();
+    expect(invalidateCalls).toBe(2);
+
+    // Teardown nulls the map; the deferred closures must now be inert, not throw.
     card._teardown();
-
-    // Now fire the callbacks that were scheduled. They should not throw
-    // because the card is guarded with if (this._map).
-    try {
-      if (stylesheetLoadCallback) stylesheetLoadCallback();
-    } catch (e) {
-      callbackThrewError = true;
-    }
-    try {
-      if (rafCallback) rafCallback();
-    } catch (e) {
-      rafCallbackThrewError = true;
-    }
-
-    // Restore original rAF.
-    globalThis.requestAnimationFrame = origRaf;
-
-    // Neither callback should have thrown.
-    expect(callbackThrewError).toBe(false);
-    expect(rafCallbackThrewError).toBe(false);
+    expect(card._map).toBe(null);
+    expect(() => { loadHandler(); rafHandler(); }).not.toThrow();
+    // The guard (if (this._map)) suppressed the calls — no new invalidateSize.
+    expect(invalidateCalls).toBe(2);
   });
 });
 
