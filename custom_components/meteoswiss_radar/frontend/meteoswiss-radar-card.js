@@ -1434,7 +1434,12 @@ class MeteoSwissRadarCard extends HTMLElement {
     SHARED_DECODE_CACHE.put(url, areas);
   }
 
-  _ensureFrame(url) {
+  // When bestEffort is true (overlay frames): keep the retry backoff so a
+  // persistently-failing URL doesn't get refetched on every tick/prefetch, but
+  // skip fail-streak accounting, 404 manifest refresh, and failure-pause — only
+  // radar_url drives degradation/recovery; overlay failures are swallowed by
+  // callers so they never pause playback or trigger the banner.
+  _ensureFrame(url, { bestEffort = false } = {}) {
     const cached = this._cacheGet(url);
     if (cached) return Promise.resolve(cached);
     const pending = this._pending.get(url);
@@ -1453,43 +1458,24 @@ class MeteoSwissRadarCard extends HTMLElement {
         this._pending.delete(url);
         this._retryAfter.delete(url);
         this._cachePut(url, areas);
-        this._failStreak = 0;
-        if (this._dataReady) this._hideBanner();
-        // Network is back: resume the mode the outage paused, if any.
-        this._maybeResumeAfterFailure();
+        if (!bestEffort) {
+          this._failStreak = 0;
+          if (this._dataReady) this._hideBanner();
+          // Network is back: resume the mode the outage paused, if any.
+          this._maybeResumeAfterFailure();
+        }
         return areas;
       })
       .catch((err) => {
         this._pending.delete(url);
         this._retryAfter.set(url, Date.now() + FRAME_RETRY_BACKOFF_MS);
         this._pruneRetryAfter();
-        this._failStreak += 1;
-        // A vanished frame usually means the manifest rolled over upstream.
-        if (this._is404(err)) this._refreshAfter404();
-        if (this._failStreak >= FAIL_STREAK_LIMIT) this._beginFailurePause();
-        throw err;
-      });
-    this._pending.set(url, p);
-    return p;
-  }
-
-  // Fetch an overlay frame best-effort: no fail-streak increment, no retry
-  // backoff. Only radar_url drives degradation/recovery; overlay failures are
-  // silently swallowed so they never pause playback or trigger the banner.
-  _ensureOverlayFrame(url) {
-    const cached = this._cacheGet(url);
-    if (cached) return Promise.resolve(cached);
-    const pending = this._pending.get(url);
-    if (pending) return pending;
-    const p = this._api(url)
-      .then((frame) => {
-        const areas = decodeFrame(frame);
-        this._pending.delete(url);
-        this._cachePut(url, areas);
-        return areas;
-      })
-      .catch((err) => {
-        this._pending.delete(url);
+        if (!bestEffort) {
+          this._failStreak += 1;
+          // A vanished frame usually means the manifest rolled over upstream.
+          if (this._is404(err)) this._refreshAfter404();
+          if (this._failStreak >= FAIL_STREAK_LIMIT) this._beginFailurePause();
+        }
         throw err;
       });
     this._pending.set(url, p);
@@ -1734,7 +1720,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       if (!this._overlayLayers[key]) continue;
       for (const f of upcoming) {
         const url = f[OVERLAY_URL_KEY[key]];
-        if (url) this._ensureOverlayFrame(url).catch(() => {});
+        if (url) this._ensureFrame(url, { bestEffort: true }).catch(() => {});
       }
     }
   }
@@ -1784,7 +1770,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         layer.setFrame(url, areas);
       } else {
         // Fetch best-effort; draw when ready if the playhead still matches.
-        this._ensureOverlayFrame(url)
+        this._ensureFrame(url, { bestEffort: true })
           .then((a) => { if (this._frameIndex === idx) layer.setFrame(url, a); })
           .catch(() => {});
       }

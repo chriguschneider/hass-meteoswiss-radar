@@ -3027,26 +3027,29 @@ describe("overlay legend swatches (_updateOverlayLegend) (issue #92)", () => {
   });
 });
 
-describe("_ensureOverlayFrame does not affect fail streak (issue #92)", () => {
+// _ensureOverlayFrame was merged into _ensureFrame(url, { bestEffort: true })
+// in issue #138. New contract: backoff IS applied (to stop request storms on
+// persistently-failing overlay URLs), but fail-streak/404-refresh/pause are not.
+describe("_ensureFrame bestEffort does not affect fail streak (issue #92, #138)", () => {
   it("does not increment _failStreak on overlay fetch failure", async () => {
     const card = new MeteoSwissRadarCard();
     card._api = () => Promise.reject(new Error("overlay 502"));
     const before = card._failStreak;
-    await card._ensureOverlayFrame("some/overlay.json").catch(() => {});
+    await card._ensureFrame("some/overlay.json", { bestEffort: true }).catch(() => {});
     expect(card._failStreak).toBe(before);
   });
 
-  it("does not set _retryAfter on overlay fetch failure", async () => {
+  it("sets _retryAfter on overlay fetch failure to prevent request storms (issue #138)", async () => {
     const card = new MeteoSwissRadarCard();
     card._api = () => Promise.reject(new Error("overlay 502"));
-    await card._ensureOverlayFrame("some/overlay.json").catch(() => {});
-    expect(card._retryAfter.has("some/overlay.json")).toBe(false);
+    await card._ensureFrame("some/overlay.json", { bestEffort: true }).catch(() => {});
+    expect(card._retryAfter.has("some/overlay.json")).toBe(true);
   });
 
   it("stores decoded areas in the shared cache on success", async () => {
     const card = new MeteoSwissRadarCard();
     card._api = () => Promise.resolve({ coords: GRID, areas: [] });
-    await card._ensureOverlayFrame("overlay.json");
+    await card._ensureFrame("overlay.json", { bestEffort: true });
     expect(card._cacheGet("overlay.json")).toBeDefined();
   });
 });
