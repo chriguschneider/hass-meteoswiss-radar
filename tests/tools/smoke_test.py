@@ -24,11 +24,17 @@ from reference_decode import decode_frame
 
 
 BASE_URL = "https://www.meteoschweiz.admin.ch"
+
+# The decoder emits WGS84 lat/lng. These bounds are the LV03 radar grid
+# (x ∈ [255.5, 964.5] km, y ∈ [-159.5, 479.5] km) projected to WGS84 via the
+# decoder's grid_km_to_latlng, widened by a ~1° margin. A decoded coordinate
+# outside this box means the coordinate system itself drifted — a failure a
+# bare ±90/±180 earth-bounds check would miss entirely.
 GEOM_VALIDATION = {
-    "x_min": 255.5,
-    "x_max": 964.5,
-    "y_min": -159.5,
-    "y_max": 479.5,
+    "lat_min": 42.5,
+    "lat_max": 50.5,
+    "lng_min": 1.5,
+    "lng_max": 13.5,
 }
 
 
@@ -54,7 +60,7 @@ def validate_geometry(decoded_areas):
     - Each area has at least one shape
     - Each shape has at least one ring
     - Each ring has at least 6 coordinate values (3 vertices)
-    - All lat/lng values are within plausible bounds (roughly earth-like)
+    - All lat/lng values fall within the radar grid's WGS84 bounds
 
     Returns True if valid, False otherwise.
     """
@@ -81,10 +87,14 @@ def validate_geometry(decoded_areas):
                     )
                     return False
 
-                # Check lat/lng bounds (roughly ±90/±180, more strictly CH-like)
+                # Check lat/lng fall within the radar grid's WGS84 bounds.
                 for i in range(0, len(ring), 2):
                     lat, lng = ring[i], ring[i + 1]
-                    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                    if not (
+                        GEOM_VALIDATION["lat_min"] <= lat <= GEOM_VALIDATION["lat_max"]
+                    ) or not (
+                        GEOM_VALIDATION["lng_min"] <= lng <= GEOM_VALIDATION["lng_max"]
+                    ):
                         print(
                             f"  ✗ Ring in area {area.get('color', '?')} "
                             f"has out-of-bounds coord: ({lat}, {lng})"
@@ -117,9 +127,12 @@ def smoke_test():
         print(f"  ✓ Animation version: {anim_version}")
 
         print("\n=== Fetching animation manifest ===")
-        anim_path = f"product/output/precipitation/animation/version__{anim_version}/de/animation.json"
+        anim_path = (
+            "product/output/precipitation/animation/"
+            f"version__{anim_version}/de/animation.json"
+        )
         manifest = fetch_json(anim_path)
-        print(f"  ✓ Manifest fetched")
+        print("  ✓ Manifest fetched")
 
         # Find the latest measurement frame
         pictures = manifest.get("map_images", [{}])[0].get("pictures", [])
@@ -134,7 +147,7 @@ def smoke_test():
             errors.append("Latest measurement frame has no radar_url")
             return False, errors
 
-        print(f"\n=== Fetching measurement frame ===")
+        print("\n=== Fetching measurement frame ===")
         print(f"  Timepoint: {latest_measurement.get('timepoint', 'N/A')}")
         frame_data = fetch_json(radar_url.lstrip("/"))
         decoded = decode_frame(frame_data)
@@ -155,7 +168,7 @@ def smoke_test():
             # Fall back to rate if no overlays
             print("  No overlay URL, skipping forecast frame test")
         else:
-            print(f"\n=== Fetching forecast frame (overlay) ===")
+            print("\n=== Fetching forecast frame (overlay) ===")
             print(f"  Timepoint: {latest_forecast.get('timepoint', 'N/A')}")
             forecast_data = fetch_json(rate_url.lstrip("/"))
             decoded = decode_frame(forecast_data)

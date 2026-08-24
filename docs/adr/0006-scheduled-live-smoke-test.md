@@ -23,8 +23,10 @@ Add a weekly GitHub Actions cron job (`smoke-test.yml`) that:
    unauthenticated MeteoSwiss API (~4 requests per run, no secrets needed).
 2. Runs `tests/tools/smoke_test.py` which:
    - Decodes both frames using the reference decoder from `reference_decode.py`.
-   - Validates plausible geometry: non-empty areas, coordinate bounds within
-     the LV03 grid (x ∈ [255.5, 964.5] km, y ∈ [-159.5, 479.5] km).
+   - Validates plausible geometry: non-empty areas and decoded WGS84
+     coordinates within the radar grid's bounds (the LV03 grid
+     x ∈ [255.5, 964.5] km, y ∈ [-159.5, 479.5] km projected to WGS84, i.e.
+     roughly lat ∈ [43.6, 49.4], lng ∈ [2.7, 12.5], with a ~1° margin).
 3. On failure, **opens or updates a GitHub issue** (not fail PRs). Upstream
    drift is not a repo regression; it is an external contract change that
    deserves its own tracking.
