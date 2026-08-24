@@ -36,37 +36,58 @@ const TEARDOWN_DEBOUNCE_MS = 2000; // grace before a detached card frees its map
 const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
 
-// Lightning strike overlay: yellow glyph on the grey swisstopo basemap.
-const LIGHTNING_COLOR = "#FFFF00";
-const LIGHTNING_OUTLINE = "#333333";
-// Half-height of the bolt glyph in canvas pixels (independent of zoom).
-const LIGHTNING_GLYPH_PX = 7;
+// Consolidated overlay descriptor array: one entry drives layer creation, legend swatches,
+// prefetch, editor defaults/chips/reset/summary from loops. Lightning integrated as
+// kind: "points" with special data path (versions-keyed fetch, not per-frame URL).
+const OVERLAYS = [
+  {
+    key: "snow",
+    label: "Snow",
+    color: "#C1DDDC",
+    cfgKey: "layer_snow",
+    urlKey: "snow_url",
+    kind: "contour",
+  },
+  {
+    key: "snowrain",
+    label: "Sleet",
+    color: "#6BEAFF",
+    cfgKey: "layer_snowrain",
+    urlKey: "snowrain_url",
+    kind: "contour",
+  },
+  {
+    key: "freezingrain",
+    label: "Freezing rain",
+    color: "#87C8FF",
+    cfgKey: "layer_freezing_rain",
+    urlKey: "freezingrain_url",
+    kind: "contour",
+  },
+  {
+    key: "lightning",
+    label: "Lightning",
+    color: "#FFFF00",
+    cfgKey: "layer_lightning",
+    kind: "points",
+    glyphPx: 7,
+    outlineColor: "#333333",
+  },
+];
 
-// App-parity overlay legend colors (display only; frame-carried colors are used for fills).
-const OVERLAY_COLORS = {
-  snow: "#C1DDDC",
-  snowrain: "#6BEAFF",
-  freezingrain: "#87C8FF",
-};
-const OVERLAY_LABELS = {
-  snow: "Snow",
-  snowrain: "Sleet",
-  freezingrain: "Freezing rain",
-};
-// Overlay frame URL key on the frame object, keyed by overlay name.
-const OVERLAY_URL_KEY = {
-  snow: "snow_url",
-  snowrain: "snowrain_url",
-  freezingrain: "freezingrain_url",
-};
-// Z-order: rate layer first, then snow, snowrain, freezing-rain (app parity).
-const OVERLAY_ORDER = ["snow", "snowrain", "freezingrain"];
-// Config key enabling each overlay layer (enabled = fetched and shown; issue #131).
-const OVERLAY_CONFIG_KEY = {
-  snow: "layer_snow",
-  snowrain: "layer_snowrain",
-  freezingrain: "layer_freezing_rain",
-};
+// Legacy: keep these derived for any code that may reference them directly.
+const OVERLAY_COLORS = Object.fromEntries(OVERLAYS.map(o => [o.key, o.color]));
+const OVERLAY_LABELS = Object.fromEntries(OVERLAYS.map(o => [o.key, o.label]));
+const OVERLAY_URL_KEY = Object.fromEntries(
+  OVERLAYS.filter(o => o.urlKey).map(o => [o.key, o.urlKey])
+);
+const OVERLAY_ORDER = OVERLAYS.filter(o => o.kind === "contour").map(o => o.key);
+const OVERLAY_CONFIG_KEY = Object.fromEntries(OVERLAYS.map(o => [o.key, o.cfgKey]));
+
+// Find a descriptor by key from the OVERLAYS array.
+function findOverlay(key) {
+  return OVERLAYS.find(o => o.key === key);
+}
 
 /* Parse lightning.json → Map<ts(number), [[lat,lng], ...]>.
  * Coerces the flat-dict string keys and string coordinate pairs to numbers. */
@@ -454,7 +475,8 @@ function makeLightningLayerClass(L) {
 
     _getBolt() {
       if (!this._bolt) {
-        const g = LIGHTNING_GLYPH_PX;
+        const desc = findOverlay("lightning");
+        const g = desc ? desc.glyphPx : 7;
         // Classic lightning bolt: top-right → mid-left → mid-right →
         // bottom-left → back up to mid-right → close to top-right.
         const p = new Path2D();
@@ -479,14 +501,17 @@ function makeLightningLayerClass(L) {
       const bolt = this._getBolt();
       const ox = this._origin.x;
       const oy = this._origin.y;
+      const desc = findOverlay("lightning");
+      const outlineColor = desc ? desc.outlineColor : "#333333";
+      const fillColor = desc ? desc.color : "#FFFF00";
       ctx.lineJoin = "round";
       ctx.lineWidth = 2;
       for (const [lat, lng] of this._strikes) {
         const pt = this._map.latLngToLayerPoint([lat, lng]);
         ctx.setTransform(1, 0, 0, 1, pt.x - ox, pt.y - oy);
-        ctx.strokeStyle = LIGHTNING_OUTLINE;
+        ctx.strokeStyle = outlineColor;
         ctx.stroke(bolt);
-        ctx.fillStyle = LIGHTNING_COLOR;
+        ctx.fillStyle = fillColor;
         ctx.fill(bolt);
       }
     },
@@ -1349,13 +1374,14 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._overlaySwatch.appendChild(cell);
     }
     if (lightningOn) {
+      const desc = findOverlay("lightning");
       const cell = document.createElement("div");
       cell.className = "cell";
       const chip = document.createElement("i");
-      chip.style.background = LIGHTNING_COLOR;
+      chip.style.background = desc ? desc.color : "#FFFF00";
       chip.style.borderRadius = "50%";
       const label = document.createElement("b");
-      label.textContent = "Lightning";
+      label.textContent = desc ? desc.label : "Lightning";
       cell.appendChild(chip);
       cell.appendChild(label);
       this._overlaySwatch.appendChild(cell);
@@ -1932,12 +1958,10 @@ const EDITOR_LABELS = {
   attribution: "Attribution",
   time_axis: "Time labels",
   large_label: "Large time label",
-  layer_snow: "Snow overlay",
-  layer_snowrain: "Sleet overlay",
-  layer_freezing_rain: "Freezing rain overlay",
-  layer_lightning: "Lightning overlay",
+  ...Object.fromEntries(OVERLAYS.map(o => [o.cfgKey, `${o.label} overlay`])),
 };
 
+// Generate editor defaults from OVERLAYS: all layers start disabled.
 const EDITOR_DEFAULTS = {
   height: 400,
   zoom: 8,
@@ -1952,10 +1976,7 @@ const EDITOR_DEFAULTS = {
   large_label: true,
   // Layers: false = layer off; true = layer fetched and shown (config-only
   // switching, issue #131 — no on-card toggles; legacy layer_<x>_on keys are ignored).
-  layer_snow: false,
-  layer_snowrain: false,
-  layer_freezing_rain: false,
-  layer_lightning: false,
+  ...Object.fromEntries(OVERLAYS.map(o => [o.cfgKey, false])),
 };
 
 const BASICS_SCHEMA = [
@@ -2045,17 +2066,12 @@ const EDITOR_SECTIONS = [
     icon: "mdi:layers-outline",
     title: "Layers",
     reset: [
-      "layer_snow", "layer_snowrain", "layer_freezing_rain", "layer_lightning",
+      ...OVERLAYS.map(o => o.cfgKey),
       // Legacy auto-on keys: no longer read, but reset still cleans them from old YAML.
       "layer_snow_on", "layer_snowrain_on", "layer_freezing_rain_on", "layer_lightning_on",
     ],
     // defaultOff: true → chip shows ON when value === true (default is false = hidden).
-    chips: [
-      { key: "layer_snow", label: "Snow", defaultOff: true },
-      { key: "layer_snowrain", label: "Sleet", defaultOff: true },
-      { key: "layer_freezing_rain", label: "Freezing rain", defaultOff: true },
-      { key: "layer_lightning", label: "Lightning", defaultOff: true },
-    ],
+    chips: OVERLAYS.map(o => ({ key: o.cfgKey, label: o.label, defaultOff: true })),
   },
 ];
 
@@ -2279,12 +2295,9 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     }
     // Build the layers summary line.
     if (this._summaryEls && this._summaryEls.layers) {
-      const activeLayerLabels = [
-        data.layer_snow === true && "Snow",
-        data.layer_snowrain === true && "Sleet",
-        data.layer_freezing_rain === true && "Freezing rain",
-        data.layer_lightning === true && "Lightning",
-      ].filter(Boolean);
+      const activeLayerLabels = OVERLAYS
+        .filter(o => data[o.cfgKey] === true)
+        .map(o => o.label);
       this._summaryEls.layers.textContent = activeLayerLabels.length
         ? activeLayerLabels.join(" · ")
         : "all off";
