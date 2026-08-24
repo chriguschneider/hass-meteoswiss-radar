@@ -67,6 +67,12 @@ function loadDecoder() {
       }
     },
     console: { info: noop, warn: noop, error: noop },
+    // Capture rAF callbacks so tests can fire them deterministically instead of
+    // relying on a real animation frame (the card schedules invalidateSize here).
+    requestAnimationFrame: (cb) => {
+      (ctx.window.__rafCbs || (ctx.window.__rafCbs = [])).push(cb);
+      return ctx.window.__rafCbs.length;
+    },
     setTimeout,
     clearTimeout,
     Promise,
@@ -92,7 +98,7 @@ function loadDecoder() {
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -2607,6 +2613,59 @@ describe("async-init teardown race (issue #68)", () => {
     // earlyFetch should have bailed at the epoch check, skipping _ensureFrame.
     expect(ensureFrameCalled).toBe(false);
     expect(card._refreshTimerStarted).toBe(false);
+  });
+
+  it("stylesheet-load callback and rAF in _createMap do not throw when map is torn down (issue #140)", () => {
+    const card = makeCard();
+    // Drive the REAL _createMap (makeCard stubs it out) so we exercise the
+    // actual link-load and rAF closures, not a copy.
+    delete card._createMap;
+    card._config = { ...card._config, center: [46.8, 8.2], zoom: 7 };
+    card._hass = { config: { latitude: 46.8, longitude: 8.2 } };
+    // _teardown only nulls _map when the card is initialized.
+    card._initialized = true;
+
+    let invalidateCalls = 0;
+    const mapStub = { invalidateSize() { invalidateCalls++; }, remove() {} };
+    const layer = { addTo() { return this; } };
+    const L = {
+      map: () => mapStub,
+      tileLayer: () => layer,
+      marker: () => layer,
+      divIcon: () => ({}),
+      Layer: { extend: () => class { addTo() { return this; } } },
+    };
+
+    // Capture the stylesheet "load" handler the card registers.
+    let loadHandler = null;
+    card.shadowRoot = {
+      getElementById: () => ({}),
+      querySelector: (sel) =>
+        sel === "link"
+          ? { addEventListener: (ev, h) => { if (ev === "load") loadHandler = h; } }
+          : null,
+    };
+
+    // The vm-context requestAnimationFrame stub records callbacks here.
+    windowRef.__rafCbs = [];
+    card._createMap(L);
+    const rafHandler = windowRef.__rafCbs[0];
+
+    // Guard against a vacuous test: both closures must actually have been set up.
+    expect(typeof loadHandler).toBe("function");
+    expect(typeof rafHandler).toBe("function");
+
+    // While the map is live, both closures recalc the map size.
+    loadHandler();
+    rafHandler();
+    expect(invalidateCalls).toBe(2);
+
+    // Teardown nulls the map; the deferred closures must now be inert, not throw.
+    card._teardown();
+    expect(card._map).toBe(null);
+    expect(() => { loadHandler(); rafHandler(); }).not.toThrow();
+    // The guard (if (this._map)) suppressed the calls — no new invalidateSize.
+    expect(invalidateCalls).toBe(2);
   });
 });
 
