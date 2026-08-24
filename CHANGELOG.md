@@ -8,6 +8,24 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+## [v0.11.0] — 2026-08-24
+
+### Changed
+
+- Card: layers are now switched only in the card configuration and an enabled
+  layer is always shown — the on-card toggle buttons (which collided with the
+  +/- zoom controls and lost their state on every dashboard reload) are gone;
+  the legacy `layer_<x>_on` keys are ignored (#131)
+- Card: editor chip changes for `layer_*` now apply to a live card without a
+  full re-init (#131)
+
+### Fixed
+
+- Card: refresh `lightning.json` on its own version, independent of the
+  animation product — a stalled animation version no longer pins stale strike
+  data on the newest frames (live-verified during the 2026-08-24 thunderstorm;
+  #131)
+
 ## [v0.10.0] — 2026-08-24
 
 ### Added
@@ -108,7 +126,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.11.0...HEAD
+[v0.11.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.10.0...v0.11.0
 [v0.10.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...v0.10.0
 [v0.9.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.8.0...v0.9.0
 [0.8.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.7.6...0.8.0
