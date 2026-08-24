@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.8.0";
+const CARD_VERSION = "0.9.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -30,6 +30,38 @@ const RECOVERY_INTERVAL_MS = 15000; // probe cadence while failure-paused
 const TEARDOWN_DEBOUNCE_MS = 2000; // grace before a detached card frees its map
 const COLOR_FORECAST = "#ffb74d"; // forecast label chip
 const RADAR_OPACITY = 0.75;
+
+// App-parity overlay legend colors (display only; frame-carried colors are used for fills).
+const OVERLAY_COLORS = {
+  snow: "#C1DDDC",
+  snowrain: "#6BEAFF",
+  freezingrain: "#87C8FF",
+};
+const OVERLAY_LABELS = {
+  snow: "Snow",
+  snowrain: "Sleet",
+  freezingrain: "Freezing rain",
+};
+// Overlay frame URL key on the frame object, keyed by overlay name.
+const OVERLAY_URL_KEY = {
+  snow: "snow_url",
+  snowrain: "snowrain_url",
+  freezingrain: "freezingrain_url",
+};
+// Z-order: rate layer first, then snow, snowrain, freezing-rain (app parity).
+const OVERLAY_ORDER = ["snow", "snowrain", "freezingrain"];
+// Config key enabling the toggle button for each overlay.
+const OVERLAY_CONFIG_KEY = {
+  snow: "layer_snow",
+  snowrain: "layer_snowrain",
+  freezingrain: "layer_freezing_rain",
+};
+// Config key for wall-tablet auto-on default.
+const OVERLAY_ON_KEY = {
+  snow: "layer_snow_on",
+  snowrain: "layer_snowrain_on",
+  freezingrain: "layer_freezing_rain_on",
+};
 
 let leafletLoader = null;
 function loadLeaflet() {
@@ -294,6 +326,13 @@ class MeteoSwissRadarCard extends HTMLElement {
     // can resume it when the teardown debounce is cancelled (re-attach within
     // the grace window). null when the card was manually paused at disconnect.
     this._playModeBeforeDetach = null;
+    // RadarLayer instances for precipitation-type overlay layers (snow, snowrain,
+    // freezingrain). Created in _createMap for each layer enabled in config.
+    this._overlayLayers = {};
+    // Per-overlay toggle state: true = overlay is currently displayed on the map.
+    // Initialised from layer_<x>_on config in _createMap; flipped by the map
+    // toggle buttons. Independent of _overlayLayers (a layer can exist but be off).
+    this._overlayActive = {};
   }
 
   setConfig(config) {
@@ -439,6 +478,8 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._map = null;
     }
     this._radar = null;
+    this._overlayLayers = {};
+    this._overlayActive = {};
     this._cache.clear();
     this._cacheSizes.clear();
     this._cacheBytes = 0;
@@ -654,6 +695,28 @@ class MeteoSwissRadarCard extends HTMLElement {
           font-size: 9px; white-space: nowrap; pointer-events: none;
           font-family: var(--primary-font-family, sans-serif);
         }
+        #layertoggles {
+          position: absolute; top: 8px; left: 8px; z-index: 1000;
+          display: flex; flex-direction: column; gap: 4px;
+        }
+        #layertoggles .ltbtn {
+          width: 28px; height: 28px; border-radius: 4px; border: none;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          background: var(--card-background-color, #fff); opacity: 0.85;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+          transition: opacity 0.15s;
+        }
+        #layertoggles .ltbtn.active { opacity: 1; }
+        #layertoggles .ltbtn svg { display: block; }
+        #overlay-swatches { margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); padding-top: 3px; }
+        #overlay-swatches .cell { display: flex; align-items: center; gap: 5px; }
+        #overlay-swatches .cell i {
+          display: block; width: 18px; height: 7px; border-radius: 1px; margin: 1px 0;
+        }
+        #overlay-swatches .cell b {
+          font-weight: normal; font-size: 9px;
+          color: var(--secondary-text-color, #666);
+        }
         #error { padding: 16px; color: var(--error-color, #b71c1c); }
         [hidden] { display: none !important; }
       </style>
@@ -662,10 +725,12 @@ class MeteoSwissRadarCard extends HTMLElement {
           <div id="map"></div>
           <div id="label" hidden><div id="label-l1" class="l1"></div><div id="label-l2" class="l2" hidden></div></div>
           <div id="banner" hidden></div>
+          <div id="layertoggles" hidden></div>
           <button id="play" aria-label="Play/Pause" hidden>${PLAY_SVG}</button>
           <div id="legend" hidden>
             <div class="title">mm/h</div>
             <div id="cells"></div>
+            <div id="overlay-swatches" hidden></div>
             <span id="modehint" hidden>measurement only</span>
           </div>
           <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
@@ -690,6 +755,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._labelL1 = root.getElementById("label-l1");
     this._labelL2 = root.getElementById("label-l2");
     this._banner = root.getElementById("banner");
+    this._layerTogglesEl = root.getElementById("layertoggles");
+    this._overlaySwatch = root.getElementById("overlay-swatches");
     this._timeline = root.getElementById("timeline");
     this._trackWrap = root.getElementById("trackwrap");
     this._tMeas = root.getElementById("tmeas");
@@ -777,13 +844,76 @@ class MeteoSwissRadarCard extends HTMLElement {
       interactive: false,
     }).addTo(this._map);
     const RadarLayer = makeRadarLayerClass(L);
+    // Rate layer first, then overlay layers in z-order (snow < snowrain < freezingrain).
     this._radar = new RadarLayer().addTo(this._map);
+    this._overlayLayers = {};
+    this._overlayActive = {};
+    for (const key of OVERLAY_ORDER) {
+      const cfgKey = OVERLAY_CONFIG_KEY[key];
+      if (!this._config[cfgKey]) continue;
+      this._overlayLayers[key] = new RadarLayer().addTo(this._map);
+      this._overlayActive[key] = !!this._config[OVERLAY_ON_KEY[key]];
+    }
+    this._buildLayerToggles();
 
     // The shadow-DOM stylesheet may finish loading after map creation; without
     // a recalc the tiles render misaligned.
     const link = this.shadowRoot.querySelector("link");
     link.addEventListener("load", () => this._map.invalidateSize());
     requestAnimationFrame(() => this._map.invalidateSize());
+  }
+
+  _buildLayerToggles() {
+    if (!this._layerTogglesEl) return;
+    this._layerTogglesEl.textContent = "";
+    let anyEnabled = false;
+    for (const key of OVERLAY_ORDER) {
+      if (!this._overlayLayers[key]) continue;
+      anyEnabled = true;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ltbtn" + (this._overlayActive[key] ? " active" : "");
+      btn.title = OVERLAY_LABELS[key];
+      btn.setAttribute("aria-label", OVERLAY_LABELS[key]);
+      btn.setAttribute("data-layer", key);
+      // Coloured swatch SVG: filled when active, grey outline when inactive.
+      btn.innerHTML = this._layerToggleSvg(key, this._overlayActive[key]);
+      btn.addEventListener("click", () => this._toggleOverlay(key));
+      this._layerTogglesEl.appendChild(btn);
+    }
+    this._layerTogglesEl.hidden = !anyEnabled;
+  }
+
+  _layerToggleSvg(key, active) {
+    const fill = active ? OVERLAY_COLORS[key] : "none";
+    const stroke = active ? OVERLAY_COLORS[key] : "#aaa";
+    return `<svg width="18" height="18" viewBox="0 0 18 18">` +
+      `<rect x="2" y="2" width="14" height="14" rx="2" ry="2"` +
+      ` fill="${fill}" stroke="${stroke}" stroke-width="2"/>` +
+      `</svg>`;
+  }
+
+  _toggleOverlay(key) {
+    this._overlayActive[key] = !this._overlayActive[key];
+    // Update the toggle button appearance.
+    if (this._layerTogglesEl) {
+      const btn = this._layerTogglesEl.querySelector(`[data-layer="${key}"]`);
+      if (btn) {
+        btn.classList.toggle("active", this._overlayActive[key]);
+        btn.innerHTML = this._layerToggleSvg(key, this._overlayActive[key]);
+      }
+    }
+    // Clear or redraw the overlay canvas immediately.
+    const layer = this._overlayLayers[key];
+    if (layer) {
+      if (!this._overlayActive[key]) {
+        layer.setFrame(null, null);
+      } else {
+        // Redraw the current frame with this overlay now active.
+        this._showOverlaysForFrame(this._frameIndex);
+      }
+    }
+    this._updateOverlayLegend();
   }
 
   /* ---------- data ---------- */
@@ -840,13 +970,23 @@ class MeteoSwissRadarCard extends HTMLElement {
           p.radar_url &&
           (p.data_type === "measurement" || p.data_type === "forecast")
       )
-      .map((p) => ({
-        url: p.radar_url.replace(/^\/+/, ""),
-        type: p.data_type,
-        day: p.day,
-        timepoint: p.timepoint,
-        ts: p.timestamp,
-      }))
+      .map((p) => {
+        const f = {
+          url: p.radar_url.replace(/^\/+/, ""),
+          type: p.data_type,
+          day: p.day,
+          timepoint: p.timepoint,
+          ts: p.timestamp,
+        };
+        // All 216 forecast frames carry overlay URLs; measurement frames do not.
+        // Store them (leading slash stripped) so _showFrame can fetch them.
+        if (p.data_type === "forecast") {
+          if (p.snow_url) f.snow_url = p.snow_url.replace(/^\/+/, "");
+          if (p.snowrain_url) f.snowrain_url = p.snowrain_url.replace(/^\/+/, "");
+          if (p.freezingrain_url) f.freezingrain_url = p.freezingrain_url.replace(/^\/+/, "");
+        }
+        return f;
+      })
       .sort((a, b) => a.ts - b.ts);
     if (!frames.length) throw new Error("no frames in animation.json");
 
@@ -945,6 +1085,40 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._cellsEl.appendChild(cell);
     }
     this._legendEl.hidden = false;
+    this._updateOverlayLegend();
+  }
+
+  _updateOverlayLegend() {
+    if (!this._overlaySwatch) return;
+    // Respect an explicit legend:false — the swatches live inside the legend
+    // panel, so forcing it visible below would override the user's config.
+    const legendOff = this._config && this._config.legend === false;
+    // Collect which overlays are currently active and have a layer.
+    const active = legendOff
+      ? []
+      : OVERLAY_ORDER.filter(
+          (key) => this._overlayLayers[key] && this._overlayActive[key]
+        );
+    this._overlaySwatch.textContent = "";
+    if (!active.length) {
+      this._overlaySwatch.hidden = true;
+      return;
+    }
+    for (const key of active) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const chip = document.createElement("i");
+      chip.style.background = OVERLAY_COLORS[key];
+      const label = document.createElement("b");
+      label.textContent = OVERLAY_LABELS[key];
+      cell.appendChild(chip);
+      cell.appendChild(label);
+      this._overlaySwatch.appendChild(cell);
+    }
+    this._overlaySwatch.hidden = false;
+    // Ensure the parent legend panel is visible (legend may be from a manifest
+    // with no rate bands but the user still wants overlay swatches).
+    if (this._legendEl) this._legendEl.hidden = false;
   }
 
   /* Hour labels sit right of a small separator at each 6-h mark; the date
@@ -1149,6 +1323,29 @@ class MeteoSwissRadarCard extends HTMLElement {
         // A vanished frame usually means the manifest rolled over upstream.
         if (this._is404(err)) this._refreshAfter404();
         if (this._failStreak >= FAIL_STREAK_LIMIT) this._beginFailurePause();
+        throw err;
+      });
+    this._pending.set(url, p);
+    return p;
+  }
+
+  // Fetch an overlay frame best-effort: no fail-streak increment, no retry
+  // backoff. Only radar_url drives degradation/recovery; overlay failures are
+  // silently swallowed so they never pause playback or trigger the banner.
+  _ensureOverlayFrame(url) {
+    const cached = this._cacheGet(url);
+    if (cached) return Promise.resolve(cached);
+    const pending = this._pending.get(url);
+    if (pending) return pending;
+    const p = this._api(url)
+      .then((frame) => {
+        const areas = decodeFrame(frame);
+        this._pending.delete(url);
+        this._cachePut(url, areas);
+        return areas;
+      })
+      .catch((err) => {
+        this._pending.delete(url);
         throw err;
       });
     this._pending.set(url, p);
@@ -1371,6 +1568,7 @@ class MeteoSwissRadarCard extends HTMLElement {
 
   _prefetch(idx) {
     const s = this._strideN();
+    const upcoming = [];
     if (this._playMode === "window" && this._winEnd !== undefined) {
       // In window mode wrap within [_winStart, _winEnd] so near the window end
       // we warm the loop-start frames instead of out-of-window frames.
@@ -1379,12 +1577,20 @@ class MeteoSwissRadarCard extends HTMLElement {
       for (let k = 1; k <= PREFETCH_AHEAD; k++) {
         const pos = ((idx - this._winStart + k * s) % len + len) % len;
         const f = this._frames[this._winStart + pos];
-        if (f) this._ensureFrame(f.url).catch(() => {});
+        if (f) { this._ensureFrame(f.url).catch(() => {}); upcoming.push(f); }
       }
     } else {
       for (let k = 1; k <= PREFETCH_AHEAD; k++) {
         const f = this._frames[(idx + k * s) % this._frames.length];
-        if (f) this._ensureFrame(f.url).catch(() => {});
+        if (f) { this._ensureFrame(f.url).catch(() => {}); upcoming.push(f); }
+      }
+    }
+    // Prefetch overlay frames for upcoming positions, best-effort.
+    for (const key of OVERLAY_ORDER) {
+      if (!this._overlayLayers[key] || !this._overlayActive[key]) continue;
+      for (const f of upcoming) {
+        const url = f[OVERLAY_URL_KEY[key]];
+        if (url) this._ensureOverlayFrame(url).catch(() => {});
       }
     }
   }
@@ -1396,6 +1602,35 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._frameIndex = idx;
     this._radar.setFrame(f.url, areas);
     this._moveMarkers(idx);
+    this._showOverlaysForFrame(idx);
+  }
+
+  _showOverlaysForFrame(idx) {
+    const f = this._frames[idx];
+    if (!f) return;
+    for (const key of OVERLAY_ORDER) {
+      const layer = this._overlayLayers[key];
+      if (!layer) continue;
+      if (!this._overlayActive[key]) {
+        layer.setFrame(null, null);
+        continue;
+      }
+      const url = f[OVERLAY_URL_KEY[key]];
+      if (!url) {
+        // Measurement frame or frame without this overlay — clear the canvas.
+        layer.setFrame(null, null);
+        continue;
+      }
+      const areas = this._cacheGet(url);
+      if (areas) {
+        layer.setFrame(url, areas);
+      } else {
+        // Fetch best-effort; draw when ready if the playhead still matches.
+        this._ensureOverlayFrame(url)
+          .then((a) => { if (this._frameIndex === idx) layer.setFrame(url, a); })
+          .catch(() => {});
+      }
+    }
   }
 
   /* Track fill, knob and label for idx. */
@@ -1476,6 +1711,10 @@ const EDITOR_LABELS = {
   attribution: "Attribution",
   time_axis: "Time labels",
   large_label: "Large time label",
+  layer_snow: "Snow overlay",
+  layer_snowrain: "Sleet overlay",
+  layer_freezing_rain: "Freezing rain overlay",
+  layer_lightning: "Lightning overlay",
 };
 
 const EDITOR_DEFAULTS = {
@@ -1490,6 +1729,16 @@ const EDITOR_DEFAULTS = {
   attribution: true,
   time_axis: true,
   large_label: true,
+  // Layer toggles: false = overlay button hidden; true = button shown, overlay starts off.
+  layer_snow: false,
+  layer_snowrain: false,
+  layer_freezing_rain: false,
+  layer_lightning: false,
+  // Wall-tablet auto-on: true = overlay toggled on at card load (requires matching layer_<x>: true).
+  layer_snow_on: false,
+  layer_snowrain_on: false,
+  layer_freezing_rain_on: false,
+  layer_lightning_on: false,
 };
 
 const BASICS_SCHEMA = [
@@ -1572,6 +1821,22 @@ const EDITOR_SECTIONS = [
       { key: "attribution", label: "Attribution" },
       { key: "time_axis", label: "Time labels" },
       { key: "large_label", label: "Large label" },
+    ],
+  },
+  {
+    key: "layers",
+    icon: "mdi:layers-outline",
+    title: "Layers",
+    reset: [
+      "layer_snow", "layer_snowrain", "layer_freezing_rain", "layer_lightning",
+      "layer_snow_on", "layer_snowrain_on", "layer_freezing_rain_on", "layer_lightning_on",
+    ],
+    // defaultOff: true → chip shows ON when value === true (default is false = hidden).
+    chips: [
+      { key: "layer_snow", label: "Snow", defaultOff: true },
+      { key: "layer_snowrain", label: "Sleet", defaultOff: true },
+      { key: "layer_freezing_rain", label: "Freezing rain", defaultOff: true },
+      { key: "layer_lightning", label: "Lightning", defaultOff: true },
     ],
   },
 ];
@@ -1729,9 +1994,17 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
       el.textContent = chip.label;
       el.addEventListener("click", () => {
         const config = { ...this._config };
-        const on = this._data()[chip.key] !== false;
-        if (on) config[chip.key] = false;
-        else delete config[chip.key]; // default is on
+        if (chip.defaultOff) {
+          // Default is false/hidden: chip ON means value === true.
+          const on = this._data()[chip.key] === true;
+          if (on) delete config[chip.key]; // restore to default (false)
+          else config[chip.key] = true;    // enable
+        } else {
+          // Default is true/shown: chip ON means value !== false.
+          const on = this._data()[chip.key] !== false;
+          if (on) config[chip.key] = false;
+          else delete config[chip.key]; // restore to default (true)
+        }
         this._emit(config);
       });
       this._chipEls[chip.key] = el;
@@ -1773,9 +2046,30 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     this._summaryEls.playback.textContent = playback;
     this._summaryEls.display.textContent = shown.length ? shown.join(" · ") : "minimal";
     if (this._chipEls) {
-      for (const key of Object.keys(this._chipEls)) {
-        this._chipEls[key].classList.toggle("on", data[key] !== false);
+      // Collect all chip definitions to determine each chip's defaultOff flag.
+      const chipDefs = {};
+      for (const def of EDITOR_SECTIONS) {
+        if (def.chips) for (const chip of def.chips) chipDefs[chip.key] = chip;
       }
+      for (const key of Object.keys(this._chipEls)) {
+        const chip = chipDefs[key];
+        const on = chip && chip.defaultOff
+          ? data[key] === true
+          : data[key] !== false;
+        this._chipEls[key].classList.toggle("on", on);
+      }
+    }
+    // Build the layers summary line.
+    if (this._summaryEls && this._summaryEls.layers) {
+      const activeLayerLabels = [
+        data.layer_snow === true && "Snow",
+        data.layer_snowrain === true && "Sleet",
+        data.layer_freezing_rain === true && "Freezing rain",
+        data.layer_lightning === true && "Lightning",
+      ].filter(Boolean);
+      this._summaryEls.layers.textContent = activeLayerLabels.length
+        ? activeLayerLabels.join(" · ")
+        : "all off";
     }
   }
 }
