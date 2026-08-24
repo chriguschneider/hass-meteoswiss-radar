@@ -178,14 +178,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         else:
             # LRU entries store gzipped bytes only (#136). Compression is done
             # off the event loop in _fetch_and_cache before this call (#135).
-            # Remove and re-account an existing entry being overwritten.
             if tail in self._lru:
                 self._lru_bytes -= len(self._lru[tail])
                 del self._lru[tail]
             self._lru[tail] = data
             self._lru_bytes += len(data)
             self._lru.move_to_end(tail)
-            # Evict LRU while byte budget is exceeded.
             while self._lru_bytes > _LRU_MAX_BYTES:
                 _, oldest_gz = self._lru.popitem(last=False)
                 self._lru_bytes -= len(oldest_gz)
