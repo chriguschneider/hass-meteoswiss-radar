@@ -1131,8 +1131,11 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!version) throw new Error("versions.json has no precipitation/animation entry");
     if (!force && version === this._animVersion) return;
     // Fetch lightning.json once per version change; independent of force flag.
+    // Only when the overlay is configured — otherwise the display path (gated on
+    // _lightningLayer) never uses it, so fetching it for every card would waste a
+    // proxy request (up to ~0.5 MB during a storm) each refresh cycle.
     const lightningVersion = versions["lightning"];
-    if (lightningVersion && lightningVersion !== this._lightningVersion) {
+    if (this._config.layer_lightning && lightningVersion && lightningVersion !== this._lightningVersion) {
       this._lightningVersion = lightningVersion; // prevent duplicate concurrent fetches
       this._api(
         `product/output/lightning/version__${lightningVersion}/lightning.json`
