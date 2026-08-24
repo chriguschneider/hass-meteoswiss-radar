@@ -34,3 +34,4 @@ added test coverage, and prose/style tweaks.
 - [0004 — Tag-triggered release gate and Keep-a-Changelog](0004-tag-triggered-release-gate.md)
 - [0005 — CodeQL static analysis as a quality gate](0005-codeql-static-analysis.md)
 - [0006 — Scheduled live smoke test against MeteoSwiss API](0006-scheduled-live-smoke-test.md)
+- [0007 — SonarCloud quality gate via CI-based analysis](0007-sonarcloud-quality-gate.md)
