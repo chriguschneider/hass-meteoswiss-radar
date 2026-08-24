@@ -173,6 +173,11 @@ _LIGHTNING_TAIL = (
 
 def _view() -> MeteoSwissRadarProxyView:
     hass = MagicMock()
+    # Simulate executor job: run the callable synchronously in tests so that
+    # async_add_executor_job remains awaitable without a real thread pool.
+    async def _executor(fn, *args):  # noqa: ANN001
+        return fn(*args)
+    hass.async_add_executor_job = _executor
     return MeteoSwissRadarProxyView(hass)
 
 
@@ -476,6 +481,105 @@ def test_cache_hit_without_gzip_serves_raw_body() -> None:
     assert resp2.compression_enabled
 
 
+def test_cache_miss_with_gzip_serves_precompressed_body() -> None:
+    """Cache miss (first request) with gzip accept-encoding serves pre-compressed body.
+
+    Regression test for issue #135: the miss/joiner path must serve the pre-compressed
+    tuple instead of calling enable_compression() on the raw body (double-compress).
+    """
+    session, calls = _counting_upstream(body=b'{"frames": []}')
+    v = _view()
+    _inject_session(v, session)
+
+    resp = _get(v, _ANIMATION_TAIL, accept_encoding="gzip")
+    assert resp.status == 200
+    assert len(calls) == 1
+    # On the miss path the response must already carry Content-Encoding: gzip
+    # and must NOT call enable_compression (that would double-compress).
+    assert resp._explicit_headers.get("Content-Encoding") == "gzip"
+    assert not resp.compression_enabled, (
+        "miss path must not call enable_compression when gzip is pre-applied"
+    )
+
+
+def test_cache_miss_without_gzip_does_not_serve_precompressed() -> None:
+    """Cache miss without gzip: raw body returned with enable_compression."""
+    session, calls = _counting_upstream(body=b'{"frames": []}')
+    v = _view()
+    _inject_session(v, session)
+
+    resp = _get(v, _ANIMATION_TAIL, accept_encoding="deflate")
+    assert resp.status == 200
+    assert resp._explicit_headers.get("Content-Encoding") != "gzip"
+    assert resp.compression_enabled
+
+
+def test_inflight_joiner_with_gzip_gets_precompressed_body() -> None:
+    """Joiners on the in-flight path receive the pre-compressed tuple (issue #135).
+
+    Before the fix, joiners got raw bytes and called enable_compression(), causing
+    a second gzip pass.  After the fix they get the (raw, gzipped) tuple and serve
+    the pre-compressed body without re-compressing.
+    """
+
+    async def _run() -> None:
+        session, calls = _counting_upstream(body=b'{"frames": []}', delay=True)
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+        request.headers = {"Accept-Encoding": "gzip"}
+
+        results = await asyncio.gather(
+            v.get(request, _ANIMATION_TAIL),
+            v.get(request, _ANIMATION_TAIL),
+        )
+        assert all(r.status == 200 for r in results)
+        for resp in results:
+            assert resp._explicit_headers.get("Content-Encoding") == "gzip", (
+                "both leader and joiner must serve pre-compressed body"
+            )
+            assert not resp.compression_enabled, (
+                "neither leader nor joiner may call enable_compression"
+                " on a pre-compressed body"
+            )
+
+    asyncio.run(_run())
+
+
+def test_compression_uses_executor_job() -> None:
+    """gzip.compress must be dispatched via async_add_executor_job, not inline.
+
+    Regression test for issue #135: inline gzip.compress at compresslevel 9 on
+    bodies up to 2 MB blocks the HA event loop.
+    """
+    executor_calls: list = []
+
+    async def _run() -> None:
+        hass = MagicMock()
+
+        async def _executor(fn, *args):  # noqa: ANN001
+            executor_calls.append((fn, args))
+            return fn(*args)
+
+        hass.async_add_executor_job = _executor
+
+        v = MeteoSwissRadarProxyView(hass)
+        session, _ = _counting_upstream(body=b'{"frames": []}')
+        _inject_session(v, session)
+        request = MagicMock()
+        request.headers = {"Accept-Encoding": "gzip"}
+        await v.get(request, _ANIMATION_TAIL)
+
+    asyncio.run(_run())
+    assert len(executor_calls) == 1, (
+        "gzip.compress must be called exactly once via async_add_executor_job"
+    )
+    fn, args = executor_calls[0]
+    import gzip as _gzip
+    assert fn is _gzip.compress, "the executor job must be gzip.compress"
+    assert args[1] == 6, "must use compresslevel 6, not the default 9"
+
+
 # ---------------------------------------------------------------------------
 # Tests: in-flight deduplication
 # ---------------------------------------------------------------------------
@@ -748,6 +852,8 @@ def test_lru_evicts_oldest_entry_when_full() -> None:
     accurate (counts both raw and compressed sizes). This test verifies that
     the LRU respects the byte budget and evicts entries when needed.
     """
+    import gzip as _gzip
+
     v = _view()
     # Fill with entries that don't compress well (random-ish data).
     # Use smaller entries so we can fit multiple while exceeding budget
@@ -756,14 +862,16 @@ def test_lru_evicts_oldest_entry_when_full() -> None:
     entry_count = int(_LRU_MAX_BYTES / entry_size) + 1  # force overflow
     # Create data that doesn't compress well (mix of patterns).
     body_template = (b"x" * 512 + b"y" * 512) * (entry_size // 1024)
+    gzipped_template = _gzip.compress(body_template, 6)
 
     for i in range(entry_count):
         tail = f"product/output/radar/rzc/radar_rzc.2024010{i // 10}_{i:04d}.json"
-        v._cache_put(tail, body_template)
+        v._cache_put(tail, (body_template, gzipped_template))
 
     # Add one more entry; it may trigger eviction to stay within budget.
     new_tail = "product/output/radar/rzc/radar_rzc.20241231_2359.json"
-    v._cache_put(new_tail, b'{"new": true}')
+    small = b'{"new": true}'
+    v._cache_put(new_tail, (small, _gzip.compress(small, 6)))
 
     # After adding the new entry, verify:
     # 1. The byte budget is respected (with one entry overage tolerance).
@@ -782,18 +890,21 @@ def test_lru_evicts_oldest_entry_when_full() -> None:
 
 def test_lru_byte_bounded_full_manifest_sweep() -> None:
     """A full-manifest playback (~291 frames) stays within byte budget without churn."""
+    import gzip as _gzip
+
     v = _view()
     # Simulate a full manifest sweep: ~291 frames, each ~100 KB.
     frame_size = 100 * 1024
     frame_count = 291
     body_template = b"x" * frame_size
+    gzipped_template = _gzip.compress(body_template, 6)
 
     for i in range(frame_count):
         tail = (
             f"product/output/precipitation/animation"
             f"/version__2024010{i // 100:01d}_{i % 100:04d}/en/animation.json"
         )
-        v._cache_put(tail, body_template)
+        v._cache_put(tail, (body_template, gzipped_template))
 
     # Verify the byte budget is respected (allow one frame overage).
     assert v._lru_bytes <= _LRU_MAX_BYTES + frame_size, (

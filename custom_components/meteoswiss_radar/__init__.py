@@ -142,23 +142,23 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             return self._lru[tail]
         return None
 
-    def _cache_put(self, tail: str, body: bytes) -> None:
+    def _cache_put(self, tail: str, data: bytes | tuple[bytes, bytes]) -> None:
         if tail.endswith("versions.json"):
-            self._versions_cache = (time.monotonic(), body)
+            # versions.json uses the TTL cache; store raw bytes only.
+            self._versions_cache = (time.monotonic(), data)  # type: ignore[arg-type]
         else:
+            # LRU entries require a pre-compressed (raw, gzipped) tuple — compression
+            # is done off the event loop in _fetch_and_cache before this call (#135).
+            raw_body, gzipped_body = data  # type: ignore[misc]
             # Remove and re-account an existing entry being overwritten.
             if tail in self._lru:
                 self._lru_bytes -= self._lru_sizes.get(tail, 0)
                 self._lru_sizes.pop(tail, None)
                 self._lru.pop(tail, None)
-            # Compress once at cache-put; store (raw, gzipped) tuple.
-            # Clients that accept gzip get pre-compressed body without per-hit
-            # recompression (issue #74).
-            gzipped_body = gzip.compress(body)
-            entry = (body, gzipped_body)
+            entry = (raw_body, gzipped_body)
             self._lru[tail] = entry
             # Track total bytes for both raw and gzipped versions.
-            entry_bytes = len(body) + len(gzipped_body)
+            entry_bytes = len(raw_body) + len(gzipped_body)
             self._lru_sizes[tail] = entry_bytes
             self._lru_bytes += entry_bytes
             self._lru.move_to_end(tail)
@@ -225,17 +225,35 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
             _LOGGER.warning("Upstream request %s failed: %s", tail, err)
             return (502, None)
 
-    async def _fetch_and_cache(self, tail: str) -> tuple[int, bytes | None]:
+    async def _fetch_and_cache(
+        self, tail: str
+    ) -> tuple[int, tuple[bytes, bytes] | bytes | None]:
         """Fetch *tail*, cache on 200, and return the result.
 
         Runs as a detached task so the result is available to joiners even
         when the leader's request handler is cancelled (issue #69).
+
+        For LRU entries the returned value is the pre-compressed (raw, gzipped)
+        tuple so both the leader and any joiners serve the pre-compressed copy
+        without triggering enable_compression() and without a double-compress
+        on the miss/joiner paths (issue #135).
         """
-        result = await self._fetch(tail)
-        status, body = result
+        status, body = await self._fetch(tail)
         if status == 200 and body is not None:
-            self._cache_put(tail, body)
-        return result
+            if tail.endswith("versions.json"):
+                # versions.json is TTL-cached as raw bytes; no gzip needed here.
+                self._cache_put(tail, body)
+                return (status, body)
+            # Compress off the event loop: compresslevel 6 is ~3-5× faster than
+            # the default 9 with ~2% larger output — acceptable for a proxy cache
+            # that already saves round-trips (issue #135).
+            gzipped = await self._hass.async_add_executor_job(
+                gzip.compress, body, 6
+            )
+            entry: tuple[bytes, bytes] = (body, gzipped)
+            self._cache_put(tail, entry)
+            return (status, entry)
+        return (status, body)
 
     # ------------------------------------------------------------------
     # Response builder
