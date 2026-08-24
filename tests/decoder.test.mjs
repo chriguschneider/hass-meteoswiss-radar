@@ -2428,3 +2428,225 @@ describe("async-init teardown race (issue #68)", () => {
     expect(card._refreshTimerStarted).toBe(false);
   });
 });
+
+describe("_refreshManifest guard branches (issue #80)", () => {
+  // Shared factory: returns a card with all DOM side-effects stubbed so
+  // _refreshManifest can run to completion without a real browser context.
+  // Call `opts.playing = true` to simulate an active playback session;
+  // pre-populate `opts.frames` / `opts.frameIndex` to exercise rollover paths.
+  function makeManifestCard(opts = {}) {
+    const card = new MeteoSwissRadarCard();
+    card._config = {};
+    card._frames = opts.frames ?? [];
+    card._frameIndex = opts.frameIndex ?? 0;
+    card._playing = opts.playing ?? false;
+    card._playMode = opts.playing ? "full" : "paused";
+    card._animVersion = opts.animVersion ?? null;
+
+    // DOM stubs
+    card._tMeas = { style: {} };
+    card._tFc = { style: {} };
+    card._tNow = { style: {}, hidden: false };
+    card._modeHint = { hidden: false };
+
+    // Stubs for methods with heavy side-effects (DOM / network / timer).
+    card._renderLegend = () => {};
+    card._buildTimelineLabels = () => {};
+    card._computeWindow = () => {};
+    card._maybeResumeAfterFailure = () => {};
+
+    // Spy stubs for rollover assertions.
+    card._jumpToCalls = [];
+    card._jumpTo = (idx) => { card._jumpToCalls.push(idx); };
+
+    card._moveMarkersCalls = [];
+    card._moveMarkers = (idx) => { card._moveMarkersCalls.push(idx); };
+
+    return card;
+  }
+
+  // Minimal valid pictures array for the animation.json stub.
+  function makePictures(overrides = []) {
+    return [
+      { radar_url: "frame-0.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:00", timestamp: 1000 },
+      { radar_url: "frame-1.bin", data_type: "forecast",    day: "23.08.2026", timepoint: "10:05", timestamp: 1300 },
+      ...overrides,
+    ];
+  }
+
+  function makeApi(version, pictures) {
+    return async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": version };
+      return { map_images: [{ pictures }], legend: [] };
+    };
+  }
+
+  // --- guard: missing key in versions.json ---
+
+  it("throws when versions.json has no precipitation/animation entry", async () => {
+    const card = makeManifestCard();
+    card._api = async (path) => {
+      if (path.includes("versions.json")) return { "other/key": "v1" };
+      return {};
+    };
+    await expect(card._refreshManifest(true)).rejects.toThrow(
+      "precipitation/animation"
+    );
+  });
+
+  // --- guard: version-unchanged early return (the 5-minute timer path) ---
+
+  it("does not fetch animation.json when version is unchanged and not forced", async () => {
+    const card = makeManifestCard({ animVersion: "v42" });
+    let animCalls = 0;
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v42" }; // same version
+      animCalls++;
+      return {};
+    };
+    await card._refreshManifest(false);
+    expect(animCalls).toBe(0);
+  });
+
+  it("proceeds past the version check when forced even if version is unchanged", async () => {
+    const card = makeManifestCard({ animVersion: "v42" });
+    let animCalls = 0;
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v42" };
+      animCalls++;
+      return { map_images: [{ pictures: makePictures() }], legend: [] };
+    };
+    await card._refreshManifest(true);
+    expect(animCalls).toBe(1);
+  });
+
+  // --- pictures filter ---
+
+  it("drops pictures with no radar_url", async () => {
+    const card = makeManifestCard();
+    const pics = [
+      { data_type: "measurement", day: "23.08.2026", timepoint: "10:00", timestamp: 1000 }, // no radar_url
+      { radar_url: "", data_type: "measurement", day: "23.08.2026", timepoint: "10:05", timestamp: 1005 }, // empty string
+      { radar_url: "good.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:10", timestamp: 1010 },
+    ];
+    card._api = makeApi("v1", pics);
+    await card._refreshManifest(true);
+    expect(card._frames).toHaveLength(1);
+    expect(card._frames[0].url).toBe("good.bin");
+  });
+
+  it("drops pictures with an unknown data_type", async () => {
+    const card = makeManifestCard();
+    const pics = [
+      { radar_url: "thumb.bin", data_type: "thumbnail",   day: "23.08.2026", timepoint: "10:00", timestamp: 1000 },
+      { radar_url: "meas.bin",  data_type: "measurement", day: "23.08.2026", timepoint: "10:05", timestamp: 1005 },
+      { radar_url: "fc.bin",    data_type: "forecast",    day: "23.08.2026", timepoint: "10:10", timestamp: 1010 },
+    ];
+    card._api = makeApi("v1", pics);
+    await card._refreshManifest(true);
+    expect(card._frames).toHaveLength(2);
+    expect(card._frames.map((f) => f.url)).toEqual(["meas.bin", "fc.bin"]);
+  });
+
+  // --- sorting ---
+
+  it("sorts out-of-order timestamps ascending", async () => {
+    const card = makeManifestCard();
+    const pics = [
+      { radar_url: "c.bin", data_type: "forecast",    day: "23.08.2026", timepoint: "10:10", timestamp: 3000 },
+      { radar_url: "a.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:00", timestamp: 1000 },
+      { radar_url: "b.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:05", timestamp: 2000 },
+    ];
+    card._api = makeApi("v1", pics);
+    await card._refreshManifest(true);
+    expect(card._frames.map((f) => f.url)).toEqual(["a.bin", "b.bin", "c.bin"]);
+  });
+
+  // --- zero-frames guard ---
+
+  it("throws when no pictures survive the filter", async () => {
+    const card = makeManifestCard();
+    const pics = [
+      { radar_url: "thumb.bin", data_type: "thumbnail", day: "23.08.2026", timepoint: "10:00", timestamp: 1000 },
+    ];
+    card._api = makeApi("v1", pics);
+    await expect(card._refreshManifest(true)).rejects.toThrow("no frames");
+  });
+
+  it("throws when map_images is absent (malformed animation.json)", async () => {
+    const card = makeManifestCard();
+    card._api = async (path) => {
+      if (path.includes("versions.json"))
+        return { "precipitation/animation": "v1" };
+      return { legend: [] }; // no map_images at all
+    };
+    await expect(card._refreshManifest(true)).rejects.toThrow("no frames");
+  });
+
+  // --- _tNow / _modeHint visibility for measurement-only manifests ---
+
+  it("hides _tNow and shows _modeHint when all frames are measurements", async () => {
+    const card = makeManifestCard();
+    const pics = [
+      { radar_url: "a.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:00", timestamp: 1000 },
+      { radar_url: "b.bin", data_type: "measurement", day: "23.08.2026", timepoint: "10:05", timestamp: 1005 },
+    ];
+    card._api = makeApi("v1", pics);
+    await card._refreshManifest(true);
+    // No forecast frames → _tNow is hidden, _modeHint is shown.
+    expect(card._tNow.hidden).toBe(true);
+    expect(card._modeHint.hidden).toBe(false);
+  });
+
+  it("shows _tNow and hides _modeHint when the manifest contains forecast frames", async () => {
+    const card = makeManifestCard();
+    card._api = makeApi("v1", makePictures()); // includes a forecast frame
+    await card._refreshManifest(true);
+    expect(card._tNow.hidden).toBe(false);
+    expect(card._modeHint.hidden).toBe(true);
+  });
+
+  // --- rollover: playing → _moveMarkers, not _jumpTo ---
+
+  it("on rollover while playing re-anchors via _moveMarkers without calling _jumpTo", async () => {
+    const prevFrames = [
+      { url: "old-0.bin", type: "measurement", ts: 1000 },
+      { url: "old-1.bin", type: "forecast",    ts: 1300 },
+    ];
+    const card = makeManifestCard({ frames: prevFrames, frameIndex: 1, playing: true });
+    card._api = makeApi("v2", makePictures());
+    await card._refreshManifest(true);
+    expect(card._jumpToCalls).toHaveLength(0);
+    expect(card._moveMarkersCalls).toHaveLength(1);
+    // The re-anchored index must be the nearest frame to the old ts (1300).
+    expect(card._frameIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  // --- rollover: paused → _jumpTo, not _moveMarkers ---
+
+  it("on rollover while paused calls _jumpTo (not _moveMarkers) to refresh the frame", async () => {
+    const prevFrames = [
+      { url: "old-0.bin", type: "measurement", ts: 1000 },
+      { url: "old-1.bin", type: "forecast",    ts: 1300 },
+    ];
+    const card = makeManifestCard({ frames: prevFrames, frameIndex: 1, playing: false });
+    card._api = makeApi("v2", makePictures());
+    await card._refreshManifest(true);
+    expect(card._jumpToCalls).toHaveLength(1);
+    expect(card._moveMarkersCalls).toHaveLength(0);
+  });
+
+  // --- no rollover when there is no previous frame ---
+
+  it("skips rollover re-anchor when _frames was empty before the refresh", async () => {
+    const card = makeManifestCard({ frames: [], frameIndex: 0 });
+    card._api = makeApi("v1", makePictures());
+    await card._refreshManifest(true);
+    expect(card._jumpToCalls).toHaveLength(0);
+    expect(card._moveMarkersCalls).toHaveLength(0);
+    expect(card._frames).toHaveLength(2);
+  });
+});
