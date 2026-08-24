@@ -33,10 +33,10 @@ broken card.
 
 ## Requirements
 
-- **Home Assistant 2024.6.0 or newer.** The integration uses
-  `StaticPathConfig` / `async_register_static_paths` (2024.6) and
-  `ConfigFlowResult` (2024.4); older installs fail at import with a cryptic
-  `ImportError`.
+- **Home Assistant 2024.7.0 or newer.** The integration uses
+  `StaticPathConfig` / `async_register_static_paths` and
+  `remove_extra_js_url` (all 2024.7) plus `ConfigFlowResult` (2024.4); older
+  installs fail at import with a cryptic `ImportError`.
 
 ## Install (HACS)
 
