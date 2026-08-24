@@ -74,7 +74,7 @@ jobs:
           # A bot auto-merge can trigger this run; allow the bot actor so the
           # implement step isn't blocked by the default non-human-actor guard.
           allowed_bots: "claude"
-          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 40 --dangerously-skip-permissions"
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 100 --dangerously-skip-permissions"
           prompt: |
             You are working, unattended, on GitHub issue
             #${{ steps.next.outputs.number }} of this repository. Read AGENTS.md
