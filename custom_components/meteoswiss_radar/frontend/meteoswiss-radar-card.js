@@ -939,7 +939,16 @@ class MeteoSwissRadarCard extends HTMLElement {
       const ds = new Date(t * 1000);
       ds.setHours(0, 0, 0, 0);
       const dayStart = ds.getTime() / 1000;
-      const dayEnd = dayStart + 86400;
+      // Next local midnight by calendar arithmetic, not +86400s: on a DST
+      // fall-back day midnight + 86400s is 23:00 of the same local day, so
+      // the next iteration snaps back to the same midnight and the loop
+      // spins forever (issue #66). setDate(+1) crosses the real day boundary
+      // regardless of the day's length, and fixes the spring-forward day's
+      // 01:00 separator offset for free.
+      const nd = new Date(dayStart * 1000);
+      nd.setDate(nd.getDate() + 1);
+      nd.setHours(0, 0, 0, 0);
+      const dayEnd = nd.getTime() / 1000;
       const visStart = Math.max(dayStart, t0);
       const visEnd = Math.min(dayEnd, t1);
       const width = ((visEnd - visStart) / span) * 100;
@@ -965,6 +974,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         this._datesRow.appendChild(b);
       }
       first = false;
+      if (dayEnd <= t) break; // cheap insurance against any non-advancing step
       t = dayEnd;
     }
   }

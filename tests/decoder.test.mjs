@@ -1714,3 +1714,141 @@ describe("resume autoplay on reconnect within teardown debounce (issue #9)", () 
     expect(card._playModeBeforeDetach).toBeNull();
   });
 });
+
+describe("_buildTimelineLabels across DST boundaries (issue #66)", () => {
+  // These tests run under TZ=Europe/Zurich (pinned in vitest.config.js).
+  // _buildTimelineLabels walks day boundaries in local time, so the DST
+  // fall-back day (25 h long) is where the old +86400s arithmetic could not
+  // cross into the next day and the while-loop spun forever, freezing the tab.
+
+  // A fresh vm realm whose document.createElement returns inert fake elements,
+  // so _buildTimelineLabels can build separator/label nodes without a browser.
+  function loadCardWithCreateElement() {
+    const src = readFileSync(cardPath, "utf8");
+    const noop = () => {};
+    const registry = {
+      get: () => undefined,
+      define: noop,
+      whenDefined: () => Promise.resolve(),
+    };
+    const ctx = {
+      window: { customElements: registry, customCards: [], L: undefined },
+      document: {
+        querySelector: () => null,
+        readyState: "complete",
+        addEventListener: noop,
+        createElement: () => ({ className: "", style: {}, textContent: "" }),
+      },
+      customElements: registry,
+      HTMLElement: class {},
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init && init.detail;
+        }
+      },
+      console: { info: noop, warn: noop, error: noop },
+      setTimeout,
+      clearTimeout,
+      Promise,
+      Date,
+      Math,
+      Array,
+      Object,
+      Number,
+      String,
+      Map,
+      Set,
+      JSON,
+      Intl,
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(
+      `${src}\n;globalThis.__card = { MeteoSwissRadarCard };`,
+      ctx,
+      { filename: "meteoswiss-radar-card.js" },
+    );
+    return ctx.__card.MeteoSwissRadarCard;
+  }
+
+  // Fake row element that records the children appended to it.
+  function fakeRow(width) {
+    return {
+      offsetWidth: width,
+      textContent: "",
+      children: [],
+      appendChild(el) {
+        this.children.push(el);
+      },
+    };
+  }
+
+  // Build a card whose timeline spans [t0, t1] and run _buildTimelineLabels.
+  function buildLabels(Card, t0, t1, rowWidth) {
+    const card = new Card();
+    card._config = { time_axis: true };
+    card._frames = [
+      { ts: t0, type: "measurement" },
+      { ts: t1, type: "forecast" },
+    ];
+    card._hoursRow = fakeRow(rowWidth);
+    card._datesRow = fakeRow(rowWidth);
+    card._buildTimelineLabels();
+    return card;
+  }
+
+  // Every real local midnight strictly after t0 and up to (incl.) t1, with the
+  // pixel left the card assigns it. Mirrors the card's own visStart/percentX math.
+  function expectedDaySeps(t0, t1, rowWidth) {
+    const span = t1 - t0;
+    const seps = [];
+    const d = new Date(t0 * 1000);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 1); // first midnight after t0
+    for (;;) {
+      const m = d.getTime() / 1000;
+      if (m > t1) break;
+      const percentX = ((m - t0) / span) * 100;
+      seps.push(Math.round((percentX / 100) * rowWidth) + "px");
+      d.setDate(d.getDate() + 1);
+      d.setHours(0, 0, 0, 0); // re-snap: the next midnight, DST-length-agnostic
+    }
+    return seps;
+  }
+
+  it("terminates and places day separators at true local midnights on the fall-back day (2026-10-25)", () => {
+    const Card = loadCardWithCreateElement();
+    // ~12 h back to ~28 h ahead, straddling the 25 h fall-back Sunday.
+    const t0 = new Date(2026, 9, 24, 12, 0, 0).getTime() / 1000; // Sat 12:00 CEST
+    const t1 = new Date(2026, 9, 26, 0, 0, 0).getTime() / 1000; // Mon 00:00 CET
+    const rowWidth = 1000;
+
+    // If the fix is absent, this call never returns (the tab-freezing spin);
+    // reaching the assertions at all is the primary regression guard.
+    const card = buildLabels(Card, t0, t1, rowWidth);
+
+    const seps = card._datesRow.children
+      .filter((el) => el.className === "daysep")
+      .map((el) => el.style.left);
+
+    // Sun 2026-10-25 00:00 and Mon 2026-10-26 00:00 — no duplicate, no offset.
+    expect(seps).toEqual(expectedDaySeps(t0, t1, rowWidth));
+    expect(seps).toHaveLength(2);
+  });
+
+  it("places the day separator exactly at midnight on the spring-forward day (2026-03-29)", () => {
+    const Card = loadCardWithCreateElement();
+    const t0 = new Date(2026, 2, 28, 12, 0, 0).getTime() / 1000; // Sat 12:00 CET
+    const t1 = new Date(2026, 2, 30, 0, 0, 0).getTime() / 1000; // Mon 00:00 CEST
+    const rowWidth = 1000;
+
+    const card = buildLabels(Card, t0, t1, rowWidth);
+
+    const seps = card._datesRow.children
+      .filter((el) => el.className === "daysep")
+      .map((el) => el.style.left);
+
+    expect(seps).toEqual(expectedDaySeps(t0, t1, rowWidth));
+  });
+});
