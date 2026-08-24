@@ -244,23 +244,9 @@ function decodeContourInto(contour, grid, verts, offset) {
       x = grid.xMin + (grid.xSpan * ((i - 1) / 2 + off)) / grid.xCount;
       y = grid.yMin + (grid.ySpan * (j / 2)) / grid.yCount;
     }
-    const yp = (x * 1000 - 600000) / 1000000;
-    const xp = (y * 1000 - 200000) / 1000000;
-    const lambda =
-      2.6779094 +
-      4.728982 * yp +
-      0.791484 * yp * xp +
-      0.1306 * yp * xp * xp -
-      0.0436 * yp * yp * yp;
-    const phi =
-      16.9023892 +
-      3.238272 * xp -
-      0.270978 * yp * yp -
-      0.002528 * xp * xp -
-      0.0447 * yp * yp * xp -
-      0.014 * xp * xp * xp;
-    verts[offset + s * 2] = (phi * 100) / 36;
-    verts[offset + s * 2 + 1] = (lambda * 100) / 36;
+    const [lat, lng] = gridKmToLatLng(x, y);
+    verts[offset + s * 2] = lat;
+    verts[offset + s * 2 + 1] = lng;
     if (s < n - 1) {
       i += d.charCodeAt(2 * s) - 77;
       j += d.charCodeAt(2 * s + 1) - 77;
