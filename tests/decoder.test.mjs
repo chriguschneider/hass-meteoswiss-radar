@@ -1384,11 +1384,7 @@ describe("shared decode cache: budget, key cap, teardown (issue #139)", () => {
   }
 
   beforeEach(() => {
-    SHARED_DECODE_CACHE._cache.clear();
-    SHARED_DECODE_CACHE._cacheSizes.clear();
-    SHARED_DECODE_CACHE._cacheBytes = 0;
-    SHARED_DECODE_CACHE._cards = 0;
-    SHARED_DECODE_CACHE._products = 0;
+    resetSharedCache();
   });
 
   it("byte budget scales with registered product count", () => {
