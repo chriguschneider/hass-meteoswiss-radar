@@ -91,6 +91,21 @@ play the configured window (looping) -> play the full timeline.
 | `time_axis` | `true` | Hour and date label rows under the timeline track. |
 | `large_label` | `true` | Big date/time label on the map with a Measurement/Forecast line. |
 
+### Overlay layers
+
+Four optional layers can be enabled per card. Each adds a toggle button (top-left map corner) and a legend swatch.
+
+| Config key | Toggle label | What it shows |
+| --- | --- | --- |
+| `layer_snow: true` | Snow | INCA snow-type contours |
+| `layer_snowrain: true` | Sleet | INCA sleet-type contours |
+| `layer_freezing_rain: true` | Freezing rain | INCA freezing-rain-type contours |
+| `layer_lightning: true` | Lightning | Strike points from the MeteoSwiss lightning product |
+
+Add `layer_<x>_on: true` alongside the corresponding `layer_<x>: true` to start the overlay visible instead of toggled off.
+
+**Lightning note:** strike data exists only for past (measurement) frames. The lightning overlay is empty on all forecast frames and shows nothing during storm-free periods — this matches the app's own behavior.
+
 ## Attribution
 
 Radar data: [MeteoSwiss](https://www.meteoschweiz.admin.ch). Basemap:

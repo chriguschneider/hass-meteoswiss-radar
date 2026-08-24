@@ -68,14 +68,14 @@ function loadDecoder() {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -2937,5 +2937,133 @@ describe("_ensureOverlayFrame does not affect fail streak (issue #92)", () => {
     card._api = () => Promise.resolve({ coords: GRID, areas: [] });
     await card._ensureOverlayFrame("overlay.json");
     expect(card._cacheGet("overlay.json")).toBeDefined();
+  });
+});
+
+// --------------------------------------------------------------------------
+// parseLightning + strikesForFrame (issue #93)
+// --------------------------------------------------------------------------
+
+describe("parseLightning (issue #93)", () => {
+  const fixtureRaw = JSON.parse(
+    readFileSync(path.join(fixturesDir, "lightning.json"), "utf8"),
+  );
+
+  it("parses the real fixture into a Map with numeric keys and numeric coord pairs", () => {
+    const map = parseLightning(fixtureRaw);
+    expect(map instanceof Map).toBe(true);
+    // Fixture has 4 distinct bucket timestamps.
+    expect(map.size).toBe(4);
+    for (const [ts, coords] of map) {
+      expect(typeof ts).toBe("number");
+      expect(Number.isFinite(ts)).toBe(true);
+      for (const [lat, lng] of coords) {
+        expect(typeof lat).toBe("number");
+        expect(typeof lng).toBe("number");
+        // All fixture strikes are in Switzerland.
+        expect(lat).toBeGreaterThan(45);
+        expect(lat).toBeLessThan(48);
+        expect(lng).toBeGreaterThan(5);
+        expect(lng).toBeLessThan(11);
+      }
+    }
+  });
+
+  it("coerces string keys to numbers", () => {
+    const map = parseLightning({ "1000": [["46.5", "7.0"]] });
+    expect(map.has(1000)).toBe(true);
+    expect(map.get(1000)).toEqual([[46.5, 7.0]]);
+  });
+
+  it("coerces string coordinate values to numbers", () => {
+    const map = parseLightning({ "1000": [["46.9892", "5.9804"]] });
+    const [[lat, lng]] = map.get(1000);
+    expect(typeof lat).toBe("number");
+    expect(typeof lng).toBe("number");
+    expect(lat).toBeCloseTo(46.9892, 4);
+    expect(lng).toBeCloseTo(5.9804, 4);
+  });
+
+  it("skips entries with non-numeric timestamp keys", () => {
+    const map = parseLightning({ bad: [["46.5", "7.0"]], "1000": [["46.5", "7.0"]] });
+    expect(map.has(NaN)).toBe(false);
+    expect(map.size).toBe(1);
+  });
+
+  it("returns an empty Map for an empty object", () => {
+    expect(parseLightning({}).size).toBe(0);
+  });
+});
+
+describe("strikesForFrame (issue #93)", () => {
+  // Simple synthetic map: buckets at ts=1000, 1300, 1600.
+  function makeMap() {
+    const m = new Map();
+    m.set(1000, [[46.9, 7.0]]);
+    m.set(1300, [[47.0, 7.1], [46.8, 7.2]]);
+    m.set(1600, [[46.7, 7.3]]);
+    return m;
+  }
+
+  it("returns strikes whose bucket falls in [frameTs, frameTs+duration)", () => {
+    // frameTs=1000, nextFrameTs=1300 → duration=300 → include bucket 1000 only.
+    const strikes = strikesForFrame(makeMap(), 1000, 1300);
+    expect(strikes).toEqual([[46.9, 7.0]]);
+  });
+
+  it("includes all strikes from a bucket that overlaps the window", () => {
+    // frameTs=1300, nextFrameTs=1600 → duration=300 → include bucket 1300 (2 strikes).
+    const strikes = strikesForFrame(makeMap(), 1300, 1600);
+    expect(strikes).toHaveLength(2);
+    expect(strikes).toContainEqual([47.0, 7.1]);
+    expect(strikes).toContainEqual([46.8, 7.2]);
+  });
+
+  it("excludes strikes that land exactly at frameTs+duration (open upper bound)", () => {
+    // bucket 1300 must NOT appear in [1000, 1300).
+    const strikes = strikesForFrame(makeMap(), 1000, 1300);
+    expect(strikes.some(([lat]) => lat === 47.0)).toBe(false);
+  });
+
+  it("includes the frame-start bucket (closed lower bound, offset=0)", () => {
+    const strikes = strikesForFrame(makeMap(), 1000, 1300);
+    expect(strikes.some(([lat]) => lat === 46.9)).toBe(true);
+  });
+
+  it("falls back to 300 s duration when nextFrameTs is null (last frame)", () => {
+    // frameTs=1300, no next → duration=300 → include bucket 1300, exclude 1600.
+    const strikes = strikesForFrame(makeMap(), 1300, null);
+    expect(strikes).toHaveLength(2);
+    expect(strikes.some(([lat]) => lat === 46.7)).toBe(false);
+  });
+
+  it("returns an empty array when no buckets fall in the window", () => {
+    expect(strikesForFrame(makeMap(), 2000, 2300)).toEqual([]);
+  });
+
+  it("handles a 10-min forecast cadence (duration=600 s)", () => {
+    // Window [1000, 1600): includes buckets 1000 and 1300.
+    const strikes = strikesForFrame(makeMap(), 1000, 1600);
+    expect(strikes).toHaveLength(3);
+  });
+
+  it("handles a 5-min measurement cadence matching the real bucket cadence", () => {
+    // Real fixture: bucket 1787543400 → window [1787543100, 1787543400) would miss it.
+    // Window [1787543400, 1787543700) should include bucket 1787543400.
+    const fixture = parseLightning(
+      JSON.parse(readFileSync(path.join(fixturesDir, "lightning.json"), "utf8")),
+    );
+    const strikes = strikesForFrame(fixture, 1787543400, 1787543700);
+    expect(strikes).toHaveLength(2); // bucket 1787543400 has 2 strikes in fixture
+  });
+
+  it("returns [lat,lng] pairs in [lat,lng] order (not [lng,lat])", () => {
+    // Fixture coords are ["lat_str","lng_str"]; parseLightning must preserve that order.
+    const map = parseLightning({ "1000": [["46.9", "7.1"]] });
+    const [[lat, lng]] = strikesForFrame(map, 1000, 1300);
+    // lat must be ~47 (Swiss latitude range), lng must be ~7.
+    expect(lat).toBeGreaterThan(45);
+    expect(lng).toBeGreaterThan(5);
+    expect(lng).toBeLessThan(11);
   });
 });
