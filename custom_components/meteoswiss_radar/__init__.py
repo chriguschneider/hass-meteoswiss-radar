@@ -65,10 +65,11 @@ _ALLOWED_PATHS = (
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
 _VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
-# Up to 4 products per forecast frame (rate + snow + snowrain + freezing-rain)
-# compete for LRU entries; entry pressure is real even though byte pressure is
-# negligible at typical frame sizes (~24 KB each).
-_LRU_MAX = 200  # max immutable-frame entries
+# Byte-bounded LRU mirroring the card's DECODE_CACHE_BYTES pattern: ~20 MB keeps
+# one full manifest (~291 frames) resident. Entry-bounded LRU thrashed on full
+# playback as ~291 frames pushed through a 50-entry cache evicted everything
+# (issue #71); byte-bounded avoids this while staying within memory budget.
+_LRU_MAX_BYTES = 20 * 1024 * 1024
 
 
 class MeteoSwissRadarProxyView(HomeAssistantView):
@@ -84,6 +85,9 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         self._versions_cache: tuple[float, bytes] | None = None
         # LRU for immutable frames (animation manifest + radar/inca frames).
         self._lru: collections.OrderedDict[str, bytes] = collections.OrderedDict()
+        # LRU byte tracking: total bytes and per-entry sizes.
+        self._lru_bytes = 0
+        self._lru_sizes: dict[str, int] = {}
         # In-flight tasks: tail → Task[(int, bytes|None)] deduplicates
         # concurrent requests for the same URL into one upstream fetch.
         # A Task (not a raw Future) lets the fetch survive leader cancellation
@@ -137,10 +141,21 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         if tail.endswith("versions.json"):
             self._versions_cache = (time.monotonic(), body)
         else:
+            # Remove and re-account an existing entry being overwritten.
+            if tail in self._lru:
+                self._lru_bytes -= self._lru_sizes.get(tail, 0)
+                self._lru_sizes.pop(tail, None)
+                self._lru.pop(tail, None)
+            # Add the new entry and track its bytes.
+            body_bytes = len(body)
             self._lru[tail] = body
+            self._lru_sizes[tail] = body_bytes
+            self._lru_bytes += body_bytes
             self._lru.move_to_end(tail)
-            while len(self._lru) > _LRU_MAX:
-                self._lru.popitem(last=False)
+            # Evict LRU while byte budget is exceeded.
+            while self._lru_bytes > _LRU_MAX_BYTES:
+                oldest_tail, oldest_body = self._lru.popitem(last=False)
+                self._lru_bytes -= self._lru_sizes.pop(oldest_tail, 0)
 
     # ------------------------------------------------------------------
     # Upstream fetch

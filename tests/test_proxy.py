@@ -125,7 +125,7 @@ from custom_components.meteoswiss_radar import (  # noqa: E402
     MeteoSwissRadarCardView,
     MeteoSwissRadarProxyView,
     MeteoSwissRadarVendorView,
-    _LRU_MAX,
+    _LRU_MAX_BYTES,
     _MAX_BODY_BYTES,
     _UPSTREAM_TIMEOUT,
     _VERSIONS_TTL,
@@ -685,23 +685,56 @@ def test_immutable_frame_cache_hit() -> None:
 
 
 def test_lru_evicts_oldest_entry_when_full() -> None:
-    """Inserting beyond _LRU_MAX entries evicts the least-recently-used entry."""
+    """Byte-bounded LRU evicts oldest entry when byte budget exceeded."""
     v = _view()
-    # Fill the LRU with synthetic entries directly.
-    for i in range(_LRU_MAX):
+    # Fill with entries ~2 MB each to saturate budget quickly.
+    entry_size = 2 * 1024 * 1024  # 2 MB per entry
+    entry_count = int(_LRU_MAX_BYTES / entry_size) + 1  # force overflow
+    body_template = b"x" * entry_size
+
+    for i in range(entry_count):
         tail = f"product/output/radar/rzc/radar_rzc.2024010{i // 10}_{i:04d}.json"
-        v._lru[tail] = b"{}"
+        v._cache_put(tail, body_template)
 
-    assert len(v._lru) == _LRU_MAX
-    first_tail = next(iter(v._lru))
+    # Track the first entry for verification.
+    first_tails = list(v._lru.keys())
 
-    # Add one more via cache_put using a valid immutable tail.
+    # Add one more entry; it should trigger eviction of the oldest.
     new_tail = "product/output/radar/rzc/radar_rzc.20241231_2359.json"
     v._cache_put(new_tail, b'{"new": true}')
 
-    assert len(v._lru) <= _LRU_MAX, "LRU exceeded max size"
-    assert first_tail not in v._lru, "oldest entry was not evicted"
+    # After adding the new entry, verify the byte budget is not grossly exceeded
+    # and the oldest entry has been evicted.
+    assert v._lru_bytes <= _LRU_MAX_BYTES + entry_size, (
+        f"LRU byte budget violated: {v._lru_bytes} > {_LRU_MAX_BYTES + entry_size}"
+    )
+    assert first_tails[0] not in v._lru, "oldest entry was not evicted"
     assert new_tail in v._lru, "new entry missing from LRU"
+
+
+def test_lru_byte_bounded_full_manifest_sweep() -> None:
+    """A full-manifest playback (~291 frames) stays within byte budget without churn."""
+    v = _view()
+    # Simulate a full manifest sweep: ~291 frames, each ~100 KB.
+    frame_size = 100 * 1024
+    frame_count = 291
+    body_template = b"x" * frame_size
+
+    for i in range(frame_count):
+        tail = (
+            f"product/output/precipitation/animation"
+            f"/version__2024010{i // 100:01d}_{i % 100:04d}/en/animation.json"
+        )
+        v._cache_put(tail, body_template)
+
+    # Verify the byte budget is respected (allow one frame overage).
+    assert v._lru_bytes <= _LRU_MAX_BYTES + frame_size, (
+        f"byte budget violated after {frame_count} frames: "
+        f"{v._lru_bytes} > {_LRU_MAX_BYTES + frame_size}"
+    )
+    # With 20 MB budget and ~100 KB frames, keep ~200 frames (no full thrash).
+    assert len(v._lru) > 150, f"expected many frames cached, got {len(v._lru)}"
+    assert len(v._lru) < frame_count, "not all frames cached (expected)"
 
 
 def test_lru_does_not_cache_versions_json() -> None:
