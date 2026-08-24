@@ -246,9 +246,24 @@ class MeteoSwissRadarCardView(HomeAssistantView):
         )
 
 
+# Routes (the two HTTP views and the static vendor mounts) can only be
+# registered once per HA run: HA has no API to unregister a view or a static
+# path, so a config-entry reload must not re-register them. This flag is
+# deliberately NOT cleared on unload -- unlike the card resource below, the
+# routes genuinely survive an unload (verified against HA 2024.7 core).
+_ROUTES_KEY = f"{DOMAIN}_routes_registered"
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Register proxy view, static frontend path and the card resource once."""
-    if hass.data.get(DOMAIN):
+    """Register proxy view and static paths once; (re-)register the card resource.
+
+    The card's extra-JS URL is removed on unload, so it must be re-added on
+    every setup -- otherwise a reload (UI "Reload", disable/enable, or
+    homeassistant.reload_config_entry) leaves every dashboard without the card
+    until a full HA restart (issue #67).
+    """
+    if hass.data.get(_ROUTES_KEY):
+        _register_card_resource(hass)
         return True
 
     hass.http.register_view(MeteoSwissRadarProxyView(hass))
@@ -278,12 +293,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ),
         ]
     )
-    add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
-    hass.data[DOMAIN] = True
+    hass.data[_ROUTES_KEY] = True
+    _register_card_resource(hass)
     return True
 
 
+def _register_card_resource(hass: HomeAssistant) -> None:
+    """Add the card's extra-JS URL to every dashboard, once per active entry.
+
+    Guarded by DOMAIN (popped on unload) so a second setup without an
+    intervening unload does not register a duplicate URL.
+    """
+    if hass.data.get(DOMAIN):
+        return
+    add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
+    hass.data[DOMAIN] = True
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Remove card from dashboards; routes remain until restart."""
+    """Remove the card resource so a later setup re-adds it; routes stay put.
+
+    The routes (views + static paths) cannot be unregistered in HA and remain
+    until restart, so _ROUTES_KEY is intentionally left set. Popping DOMAIN
+    lets the next async_setup_entry re-register the card resource (issue #67).
+    """
     remove_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
+    hass.data.pop(DOMAIN, None)
     return True

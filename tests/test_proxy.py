@@ -109,7 +109,9 @@ from custom_components.meteoswiss_radar import (  # noqa: E402
     _MAX_BODY_BYTES,
     _VERSIONS_TTL,
     async_setup_entry,
+    async_unload_entry,
 )
+import custom_components.meteoswiss_radar as _integration  # noqa: E402
 
 # Shorthand used in every test.
 _VERSIONS_TAIL = "product/output/versions.json"
@@ -600,6 +602,64 @@ def test_async_setup_entry_is_idempotent() -> None:
 
     assert first_count == 2, "expected two view registrations on first setup"
     assert second_count == 2, "second setup must not register views again"
+
+
+def test_reload_reregisters_card_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reload (unload then setup) must re-add the card's extra-JS URL.
+
+    Regression test for issue #67: async_unload_entry removes the extra-JS URL,
+    so async_setup_entry must add it again -- otherwise every dashboard loses
+    the card until a full HA restart.
+    """
+    added: list[str] = []
+    removed: list[str] = []
+    monkeypatch.setattr(
+        _integration, "add_extra_js_url", lambda hass, url: added.append(url)
+    )
+    monkeypatch.setattr(
+        _integration, "remove_extra_js_url", lambda hass, url: removed.append(url)
+    )
+
+    hass = MagicMock()
+    hass.data = {}
+    hass.http.async_register_static_paths = AsyncMock()
+    entry = MagicMock()
+
+    _run(async_setup_entry(hass, entry))
+    assert added == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
+
+    _run(async_unload_entry(hass, entry))
+    assert removed == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
+
+    # The reload: setup again after unload must restore the card resource...
+    _run(async_setup_entry(hass, entry))
+    assert added == [
+        "/meteoswiss_radar/frontend/meteoswiss-radar-card.js",
+        "/meteoswiss_radar/frontend/meteoswiss-radar-card.js",
+    ], "reload must re-register the card resource"
+
+    # ...but must not re-register the (non-unregisterable) HTTP views.
+    assert hass.http.register_view.call_count == 2, (
+        "views must be registered only once across a reload"
+    )
+
+
+def test_setup_does_not_duplicate_card_resource_without_unload() -> None:
+    """Two setups without an intervening unload must add the URL only once."""
+    added: list[str] = []
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            _integration, "add_extra_js_url", lambda hass, url: added.append(url)
+        )
+        hass = MagicMock()
+        hass.data = {}
+        hass.http.async_register_static_paths = AsyncMock()
+        entry = MagicMock()
+
+        _run(async_setup_entry(hass, entry))
+        _run(async_setup_entry(hass, entry))
+
+    assert added == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
 
 
 def test_config_flow_aborts_on_second_instance() -> None:
