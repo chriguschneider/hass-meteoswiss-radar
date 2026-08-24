@@ -282,6 +282,11 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._failStreak = 0;
     this._dataReady = false;
     this._lastManifest404Refresh = 0;
+    // Generation counter: incremented by _teardown so async continuations
+    // started by _maybeInit/_loadData can detect stale state and bail before
+    // creating a map, starting the refresh timer, or spinning a play loop on
+    // a card that has since been detached.
+    this._epoch = 0;
     // Play mode remembered when a fail-streak paused playback, so recovery can
     // restart the same loop. null unless a network outage paused us.
     this._pausedByFailure = null;
@@ -415,6 +420,10 @@ class MeteoSwissRadarCard extends HTMLElement {
   _teardown() {
     this._teardownTimer = null;
     if (!this._initialized) return;
+    // Advance the generation so any _maybeInit/_loadData continuation that
+    // resumes after this point sees stale state and returns without creating
+    // a map, starting a timer, or spinning a play loop.
+    this._epoch++;
     this._pause();
     this._stopRecoveryTimer();
     if (this._timelineResizeObserver) {
@@ -468,11 +477,17 @@ class MeteoSwissRadarCard extends HTMLElement {
   async _maybeInit() {
     if (this._initialized || !this._hass || !this.isConnected) return;
     this._initialized = true;
+    const epoch = this._epoch;
     this._renderShell();
     try {
-      this._L = await loadLeaflet();
+      this._L = await this._loadLeaflet();
+      // Guard: _teardown may have fired while we awaited Leaflet.
+      if (this._epoch !== epoch) return;
       this._createMap(this._L);
     } catch (err) {
+      // Guard: if teardown already cleaned up, do not reset _initialized
+      // because a new _maybeInit may have set it again.
+      if (this._epoch !== epoch) return;
       // Script load failed (e.g. flaky network). Reset so the next hass/
       // connectedCallback call retries rather than staying permanently broken.
       this._initialized = false;
@@ -482,10 +497,18 @@ class MeteoSwissRadarCard extends HTMLElement {
     try {
       await this._loadData();
     } catch (err) {
+      if (this._epoch !== epoch) return;
       console.warn("meteoswiss-radar-card: initial data load failed:", err);
       this._showBanner("Radar data is currently unavailable");
     }
+    if (this._epoch !== epoch) return;
     this._startRefreshTimer();
+  }
+
+  // Thin wrapper so tests can stub Leaflet loading without touching the
+  // module-level leafletLoader singleton.
+  _loadLeaflet() {
+    return loadLeaflet();
   }
 
   _renderShell() {
@@ -756,10 +779,16 @@ class MeteoSwissRadarCard extends HTMLElement {
   /* ---------- data ---------- */
 
   async _loadData() {
+    const epoch = this._epoch;
     await this._refreshManifest(true);
+    // Guard: bail if _teardown fired while awaiting the manifest so we don't
+    // show a stale frame, set _dataReady, or spin an autoplay loop on a card
+    // that is no longer attached.
+    if (this._epoch !== epoch) return;
     this._hideBanner();
     const idx = this._lastMeasurementIndex();
     await this._ensureFrame(this._frames[idx].url);
+    if (this._epoch !== epoch) return;
     this._showFrame(idx);
     this._prefetch(idx);
     this._timeline.hidden = false;
