@@ -94,6 +94,8 @@ def test_hacs_json_is_valid() -> None:
     assert re.fullmatch(r"\d{4}\.\d+\.\d+", hacs["homeassistant"])
     # HACS renders the README as the store page.
     assert hacs.get("render_readme") is True
-    # The declared minimum must match the newest HA API the code relies on:
-    # StaticPathConfig / async_register_static_paths landed in 2024.6.
-    assert hacs["homeassistant"] == "2024.6.0"
+    # The declared minimum must match the newest HA API the code relies on.
+    # StaticPathConfig / async_register_static_paths and remove_extra_js_url
+    # all landed in 2024.7 -- the dev-blog post announcing them is dated
+    # 2024-06-18, which is where the earlier "2024.6" claim came from.
+    assert hacs["homeassistant"] == "2024.7.0"
