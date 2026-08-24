@@ -141,3 +141,36 @@ def test_decode_snowrain_frame_synthetic() -> None:
         (FIXTURES / "snowrain_frame_synthetic_decoded.json").read_text(encoding="utf-8")
     )
     assert decode_frame(frame) == expected
+
+
+def test_decode_freezingrain_frame_empty() -> None:
+    """Empty freezingrain frame (no areas) decodes to an empty array.
+
+    Verified live 2026-08-24: in August, freezingrain overlay frames have no
+    contours. The empty areas array must decode to an empty result.
+    """
+    frame = json.loads(
+        (FIXTURES / "freezingrain_frame_empty.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (FIXTURES / "freezingrain_frame_empty_decoded.json").read_text(encoding="utf-8")
+    )
+    assert decode_frame(frame) == expected
+
+
+def test_decode_freezingrain_frame_synthetic() -> None:
+    """Synthetic freezingrain frame with one area decodes correctly.
+
+    Fixture uses the freezingrain legend color (#87C8FF) and a small contour
+    on the real 710x640 grid to verify the decoder works for freezingrain
+    overlays the same as for rate and other precipitation layers.
+    """
+    frame = json.loads(
+        (FIXTURES / "freezingrain_frame_synthetic.json").read_text(encoding="utf-8")
+    )
+    expected = json.loads(
+        (FIXTURES / "freezingrain_frame_synthetic_decoded.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert decode_frame(frame) == expected
