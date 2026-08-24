@@ -20,22 +20,40 @@ import urllib.error
 from datetime import datetime
 
 sys.path.insert(0, "tests/tools")
-from reference_decode import decode_frame
+from reference_decode import decode_frame, grid_km_to_latlng
 
 
 BASE_URL = "https://www.meteoschweiz.admin.ch"
 
-# The decoder emits WGS84 lat/lng. These bounds are the LV03 radar grid
-# (x ∈ [255.5, 964.5] km, y ∈ [-159.5, 479.5] km) projected to WGS84 via the
-# decoder's grid_km_to_latlng, widened by a ~1° margin. A decoded coordinate
-# outside this box means the coordinate system itself drifted — a failure a
-# bare ±90/±180 earth-bounds check would miss entirely.
-GEOM_VALIDATION = {
-    "lat_min": 42.5,
-    "lat_max": 50.5,
-    "lng_min": 1.5,
-    "lng_max": 13.5,
-}
+
+def get_geom_validation_bounds():
+    """Derive WGS84 bounds from the LV03 radar grid via grid_km_to_latlng.
+
+    LV03 grid: x ∈ [255.5, 964.5] km, y ∈ [-159.5, 479.5] km.
+    Returns bounds widened by a ~1° margin.
+    """
+    corners = [
+        (255.5, -159.5),
+        (964.5, -159.5),
+        (964.5, 479.5),
+        (255.5, 479.5),
+    ]
+    lats = []
+    lngs = []
+    for x_km, y_km in corners:
+        lat, lng = grid_km_to_latlng(x_km, y_km)
+        lats.append(lat)
+        lngs.append(lng)
+
+    return {
+        "lat_min": min(lats) - 1.0,
+        "lat_max": max(lats) + 1.0,
+        "lng_min": min(lngs) - 1.0,
+        "lng_max": max(lngs) + 1.0,
+    }
+
+
+GEOM_VALIDATION = get_geom_validation_bounds()
 
 
 def fetch_json(path):
@@ -54,9 +72,10 @@ def fetch_json(path):
 
 
 def validate_geometry(decoded_areas):
-    """Validate that decoded areas contain plausible geometry.
+    """Validate that decoded areas contain plausible geometry when present.
 
-    - At least one area
+    Empty frames (e.g., snow overlays in summer, dry measurement days) are valid
+    as long as they decode successfully. Validates only non-empty frames:
     - Each area has at least one shape
     - Each shape has at least one ring
     - Each ring has at least 6 coordinate values (3 vertices)
@@ -65,8 +84,8 @@ def validate_geometry(decoded_areas):
     Returns True if valid, False otherwise.
     """
     if not decoded_areas:
-        print("  ✗ No areas decoded (empty frame)")
-        return False
+        print("  ✓ Empty frame (valid decode, no areas)")
+        return True
 
     total_vertices = 0
     for area in decoded_areas:
@@ -156,26 +175,29 @@ def smoke_test():
             return False, errors
         print("  ✓ Geometry valid")
 
-        # Find the latest forecast frame
+        # Find the latest forecast frame (INCA rate, per ADR-0006)
         forecast_pics = [p for p in pictures if p.get("data_type") == "forecast"]
         if not forecast_pics:
             errors.append("No forecast frames in manifest")
             return False, errors
 
         latest_forecast = forecast_pics[-1]
-        rate_url = latest_forecast.get("snow_url")  # Use first overlay as proxy
+        # The INCA rate forecast is the forecast picture's radar_url (points at
+        # .../inca/precipitation/rate/...); snow_url/snowrain_url/freezingrain_url
+        # are the type overlays. There is no separate rate_url field.
+        rate_url = latest_forecast.get("radar_url")
         if not rate_url:
-            # Fall back to rate if no overlays
-            print("  No overlay URL, skipping forecast frame test")
-        else:
-            print("\n=== Fetching forecast frame (overlay) ===")
-            print(f"  Timepoint: {latest_forecast.get('timepoint', 'N/A')}")
-            forecast_data = fetch_json(rate_url.lstrip("/"))
-            decoded = decode_frame(forecast_data)
-            if not validate_geometry(decoded):
-                errors.append("Forecast frame (overlay) geometry validation failed")
-                return False, errors
-            print("  ✓ Geometry valid")
+            errors.append("Latest forecast frame has no radar_url")
+            return False, errors
+
+        print("\n=== Fetching forecast frame (INCA rate) ===")
+        print(f"  Timepoint: {latest_forecast.get('timepoint', 'N/A')}")
+        forecast_data = fetch_json(rate_url.lstrip("/"))
+        decoded = decode_frame(forecast_data)
+        if not validate_geometry(decoded):
+            errors.append("Forecast frame (INCA rate) geometry validation failed")
+            return False, errors
+        print("  ✓ Geometry valid")
 
     except Exception as e:
         errors.append(f"Unexpected error: {e}")

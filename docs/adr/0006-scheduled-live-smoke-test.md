@@ -46,3 +46,13 @@ without excessive API load.
   detected; frame decoding failed on [date]". The issue becomes the tracking
   item for investigation and fixes.
 
+## Empty-frame policy (decided 2026-08-24)
+
+Empty frames (e.g., snow overlays during summer months, measurement frames on dry days)
+are **valid decode results**. The smoke test asserts only that:
+1. The fetch succeeds.
+2. The frame decodes without error (schema is correct).
+
+Coordinate-bounds validation (`GEOM_VALIDATION`) runs **only when areas are present**
+(non-empty frames). This avoids false-positive failures during seasonal droughts.
+
