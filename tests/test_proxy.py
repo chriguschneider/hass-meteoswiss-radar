@@ -434,6 +434,182 @@ def test_concurrent_requests_for_versions_json_produce_one_upstream_fetch() -> N
     assert len(calls) == 1, f"expected 1 upstream fetch, got {len(calls)}"
 
 
+def test_leader_cancelled_waiter_still_receives_200() -> None:
+    """Leader is cancelled mid-fetch; the joined waiter still receives 200.
+
+    Regression test for issue #69: the old implementation explicitly cancelled
+    the in-flight Future when the leader got CancelledError, which killed every
+    joiner even though their clients were still connected.  The fix runs the
+    fetch as a detached Task that survives leader cancellation.
+    """
+
+    async def _run() -> None:
+        # An event that the test releases once both tasks are suspended so the
+        # upstream response can be delivered in a controlled order.
+        ready = asyncio.Event()
+        release = asyncio.Event()
+
+        class _BlockingContent:
+            async def iter_chunked(self, _size: int):  # noqa: ANN001
+                ready.set()
+                await release.wait()
+                yield b'{"frames": []}'
+
+        @asynccontextmanager
+        async def _blocking_get(*_a, **_kw):
+            resp = MagicMock()
+            resp.status = 200
+            resp.headers = {"Content-Type": "application/json"}
+            resp.content = _BlockingContent()
+            yield resp
+
+        session = MagicMock()
+        session.get = _blocking_get
+
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+
+        leader = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+        joiner = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+
+        # Wait until the fetch has started (blocked inside _BlockingContent).
+        await ready.wait()
+        # Give the joiner a chance to register on the shield.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        # Cancel the leader; the detached fetch task must survive.
+        leader.cancel()
+        try:
+            await leader
+        except asyncio.CancelledError:
+            pass
+
+        # Release the upstream response — the fetch task completes and the
+        # joiner should receive the 200.
+        release.set()
+        resp = await asyncio.wait_for(joiner, timeout=5.0)
+        assert resp.status == 200
+
+    asyncio.run(_run())
+
+
+def test_concurrent_502_both_receive_502_one_upstream_call() -> None:
+    """Two concurrent GETs, upstream 502: both callers get 502; one fetch."""
+
+    async def _run() -> None:
+        calls: list = []
+        release = asyncio.Event()
+
+        class _SlowContent:
+            async def iter_chunked(self, _size: int):  # noqa: ANN001
+                yield b""
+
+        @asynccontextmanager
+        async def _get(*_a, **_kw):
+            calls.append(1)
+            await release.wait()
+            resp = MagicMock()
+            resp.status = 502
+            resp.headers = {"Content-Type": "application/json"}
+            resp.content = _SlowContent()
+            yield resp
+
+        session = MagicMock()
+        session.get = _get
+
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+
+        t1 = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+        t2 = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        release.set()
+        results = await asyncio.gather(t1, t2)
+
+        assert all(r.status == 502 for r in results)
+        assert len(calls) == 1, f"expected 1 upstream call, got {len(calls)}"
+
+    asyncio.run(_run())
+
+
+def test_fetch_task_exception_seen_by_waiter_and_inflight_cleared() -> None:
+    """Unexpected exception in the fetch task: joiner sees it; _inflight is empty."""
+
+    async def _run() -> None:
+        release = asyncio.Event()
+
+        class _BrokenContent:
+            async def iter_chunked(self, _size: int):  # noqa: ANN001
+                await release.wait()
+                raise RuntimeError("boom")
+                yield  # make it an async generator
+
+        @asynccontextmanager
+        async def _get(*_a, **_kw):
+            resp = MagicMock()
+            resp.status = 200
+            resp.headers = {"Content-Type": "application/json"}
+            resp.content = _BrokenContent()
+            yield resp
+
+        session = MagicMock()
+        session.get = _get
+
+        v = _view()
+        _inject_session(v, session)
+        request = MagicMock()
+
+        leader = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+        joiner = asyncio.create_task(v.get(request, _ANIMATION_TAIL))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        release.set()
+        with pytest.raises(RuntimeError, match="boom"):
+            await leader
+        with pytest.raises(RuntimeError, match="boom"):
+            await joiner
+
+        # No stuck entry — done_callback must have removed it.
+        assert _ANIMATION_TAIL not in v._inflight
+
+    asyncio.run(_run())
+
+
+def test_error_response_not_cached_second_request_refetches() -> None:
+    """A 502 response is not cached; the next sequential request goes upstream."""
+    calls: list = []
+
+    @asynccontextmanager
+    async def _get(*_a, **_kw):
+        calls.append(1)
+        resp = MagicMock()
+        resp.status = 502
+        resp.headers = {"Content-Type": "application/json"}
+        resp.content = MagicMock()
+        yield resp
+
+    session = MagicMock()
+    session.get = _get
+
+    v = _view()
+    _inject_session(v, session)
+
+    _get_coro = v.get(MagicMock(), _ANIMATION_TAIL)
+    asyncio.run(_get_coro)
+    _get_coro2 = v.get(MagicMock(), _ANIMATION_TAIL)
+    asyncio.run(_get_coro2)
+
+    assert len(calls) == 2, (
+        "error responses must not be cached; upstream must be called twice"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests: versions.json TTL cache
 # ---------------------------------------------------------------------------

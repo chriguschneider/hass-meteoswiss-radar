@@ -65,9 +65,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         self._versions_cache: tuple[float, bytes] | None = None
         # LRU for immutable frames (animation manifest + radar/inca frames).
         self._lru: collections.OrderedDict[str, bytes] = collections.OrderedDict()
-        # In-flight futures: tail → Future[(int, bytes|None)] deduplicates
+        # In-flight tasks: tail → Task[(int, bytes|None)] deduplicates
         # concurrent requests for the same URL into one upstream fetch.
-        self._inflight: dict[str, asyncio.Future] = {}
+        # A Task (not a raw Future) lets the fetch survive leader cancellation
+        # so joiners still receive the result when the leader client disconnects
+        # (issue #69).
+        self._inflight: dict[str, asyncio.Task] = {}
 
     async def get(self, request: web.Request, tail: str) -> web.Response:
         if not any(rx.fullmatch(tail) for rx in _ALLOWED_PATHS):
@@ -83,30 +86,16 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         if cached is not None:
             return self._build_response(tail, 200, cached)
 
-        # Cache miss: fetch from upstream, protected by an in-flight Future so
-        # any concurrent arrivals for the same tail join this fetch.
+        # Cache miss: run the fetch as a detached task so it survives leader
+        # cancellation (issue #69). The leader and any joiners all shield the
+        # same task; when the leader client disconnects, the task finishes and
+        # caches the result, and the joiners still receive it.
         loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-        self._inflight[tail] = fut
-        result: tuple[int, bytes | None]
-        try:
-            result = await self._fetch(tail)
-            if not fut.done():
-                fut.set_result(result)
-        except asyncio.CancelledError:
-            if not fut.done():
-                fut.cancel()
-            raise
-        except Exception as exc:
-            if not fut.done():
-                fut.set_exception(exc)
-            raise
-        finally:
-            self._inflight.pop(tail, None)
+        task: asyncio.Task = loop.create_task(self._fetch_and_cache(tail))
+        self._inflight[tail] = task
+        task.add_done_callback(lambda _t: self._inflight.pop(tail, None))
 
-        status, body = result
-        if status == 200 and body is not None:
-            self._cache_put(tail, body)
+        status, body = await asyncio.shield(task)
         return self._build_response(tail, status, body)
 
     # ------------------------------------------------------------------
@@ -191,6 +180,18 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         except ClientError as err:
             _LOGGER.warning("Upstream request %s failed: %s", tail, err)
             return (502, None)
+
+    async def _fetch_and_cache(self, tail: str) -> tuple[int, bytes | None]:
+        """Fetch *tail*, cache on 200, and return the result.
+
+        Runs as a detached task so the result is available to joiners even
+        when the leader's request handler is cancelled (issue #69).
+        """
+        result = await self._fetch(tail)
+        status, body = result
+        if status == 200 and body is not None:
+            self._cache_put(tail, body)
+        return result
 
     # ------------------------------------------------------------------
     # Response builder
