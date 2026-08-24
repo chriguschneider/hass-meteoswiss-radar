@@ -28,6 +28,22 @@ function loadDecoder() {
     define: noop,
     whenDefined: () => Promise.resolve(),
   };
+  // Minimal Path2D stub for tests that mock Leaflet layer rendering.
+  class StubPath2D {
+    constructor() {
+      this._commands = [];
+    }
+    moveTo(x, y) {
+      this._commands.push(['moveTo', x, y]);
+    }
+    lineTo(x, y) {
+      this._commands.push(['lineTo', x, y]);
+    }
+    closePath() {
+      this._commands.push(['closePath']);
+    }
+  }
+
   const ctx = {
     window: { customElements: registry, customCards: [], L: undefined },
     document: {
@@ -64,18 +80,19 @@ function loadDecoder() {
     Set,
     JSON,
     Intl,
+    Path2D: StubPath2D,
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE };`,
     ctx,
     { filename: "meteoswiss-radar-card.js" },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE } =
   loadDecoder();
 
 // Real Swiss radar composite grid (from FORMAT.md).
@@ -3297,5 +3314,199 @@ describe("_pruneRetryAfter expiration pruning (issue #81)", () => {
     card._pruneRetryAfter();
     // just-future must be kept because it is past 'now' (not expired).
     expect(card._retryAfter.has("just-future")).toBe(true);
+  });
+});
+
+describe("Path2D cache eviction and view-key clear (issue #82)", () => {
+  // Stub Leaflet objects to exercise makeRadarLayerClass without a real DOM or leaflet.
+  // The RadarLayer needs: _map with getZoom(), getPixelOrigin(), getSize(), containerPointToLayerPoint(), on/off, getPane()
+  // A minimal stub for Path2D that can be instantiated and has moveTo/lineTo/closePath.
+  function makeStubLeaflet() {
+    let listeners = {};
+    return {
+      Layer: {
+        extend(methods) {
+          return function() {
+            this._pathCache = new Map();
+            this._pathCacheMax = 48;
+            for (const [key, fn] of Object.entries(methods)) {
+              this[key] = fn;
+            }
+          };
+        },
+      },
+      DomUtil: {
+        create() {
+          return {
+            width: 0,
+            height: 0,
+            style: {},
+            getContext() {
+              return {
+                setTransform() {},
+                clearRect() {},
+                fillStyle: "",
+                globalAlpha: 1,
+                fill() {},
+              };
+            },
+          };
+        },
+        remove() {},
+        setPosition() {},
+      },
+      StubMap: {
+        getZoom() { return 8; },
+        getPixelOrigin() { return { x: 0, y: 0 }; },
+        getSize() { return { x: 512, y: 512 }; },
+        containerPointToLayerPoint() { return { x: 0, y: 0 }; },
+        on(event, fn, ctx) {
+          if (!listeners[event]) listeners[event] = [];
+          listeners[event].push({ fn, ctx });
+        },
+        off(event, fn) {
+          if (listeners[event]) {
+            listeners[event] = listeners[event].filter(l => l.fn !== fn);
+          }
+        },
+        getPane() {
+          return { appendChild() {} };
+        },
+        // Helper to trigger events in tests
+        _triggerEvent(event) {
+          if (listeners[event]) {
+            for (const { fn, ctx } of listeners[event]) {
+              fn.call(ctx);
+            }
+          }
+        },
+      },
+    };
+  }
+
+  function makeStubPath2D() {
+    let commands = [];
+    return {
+      moveTo(x, y) { commands.push(['moveTo', x, y]); },
+      lineTo(x, y) { commands.push(['lineTo', x, y]); },
+      closePath() { commands.push(['closePath']); },
+      _commands: commands,
+    };
+  }
+
+  it("Path2D LRU eviction: oldest entry is removed when cache exceeds PATH_CACHE_SIZE", () => {
+    const L = makeStubLeaflet();
+    const RadarLayer = makeRadarLayerClass(L);
+    const layer = new RadarLayer();
+    layer.initialize();
+
+    // Stub _map for layer initialization
+    const map = Object.create(L.StubMap);
+    layer._map = map;
+    layer._canvas = L.DomUtil.create();
+    layer._key = "0:0:0";
+    layer._origin = { x: 0, y: 0 };
+
+    // Create minimal areas array (one shape with one ring and two vertices).
+    const makeAreas = () => [
+      {
+        color: "#000000",
+        verts: new Float32Array([47.5, 8.5, 47.6, 8.6]),
+        rings: new Int32Array([0, 4]),
+      },
+    ];
+
+    // Fill the cache up to PATH_CACHE_SIZE.
+    for (let i = 0; i < PATH_CACHE_SIZE; i++) {
+      layer._getPaths(`frame-${i}`, makeAreas());
+    }
+    expect(layer._pathCache.size).toBe(PATH_CACHE_SIZE);
+
+    // Adding one more should evict the oldest (frame-0).
+    layer._getPaths(`frame-${PATH_CACHE_SIZE}`, makeAreas());
+    expect(layer._pathCache.size).toBe(PATH_CACHE_SIZE);
+    expect(layer._pathCache.has("frame-0")).toBe(false);
+    expect(layer._pathCache.has(`frame-${PATH_CACHE_SIZE}`)).toBe(true);
+
+    // Accessing an existing entry makes it MRU (not removed on next eviction).
+    layer._getPaths("frame-1", makeAreas());
+    layer._getPaths(`frame-${PATH_CACHE_SIZE + 1}`, makeAreas());
+    expect(layer._pathCache.has("frame-1")).toBe(true);
+    expect(layer._pathCache.has("frame-2")).toBe(false); // oldest is now evicted
+  });
+
+  it("_reset view-key cache clear: _pathCache is cleared when view changes (zoom/pan)", () => {
+    const L = makeStubLeaflet();
+    const RadarLayer = makeRadarLayerClass(L);
+    const layer = new RadarLayer();
+    layer.initialize();
+
+    const map = Object.create(L.StubMap);
+    layer._map = map;
+    layer._canvas = L.DomUtil.create();
+    layer._key = "8:0:0"; // initial view key
+    layer._origin = { x: 0, y: 0 };
+    layer._viewKey = function() {
+      return `${this._map.getZoom()}:${this._map.getPixelOrigin().x}:${this._map.getPixelOrigin().y}`;
+    };
+
+    const makeAreas = () => [
+      {
+        color: "#000000",
+        verts: new Float32Array([47.5, 8.5, 47.6, 8.6]),
+        rings: new Int32Array([0, 4]),
+      },
+    ];
+
+    // Populate cache with some paths.
+    layer._getPaths("frame-1", makeAreas());
+    layer._getPaths("frame-2", makeAreas());
+    expect(layer._pathCache.size).toBe(2);
+
+    // Simulate a zoom event (view key changes from "8:0:0" to "9:0:0").
+    // Manually update zoom (simulating map.getZoom() returning 9 now).
+    map.getZoom = function() { return 9; };
+
+    // Call _reset() to check for view key change.
+    layer._reset();
+
+    // After _reset with view key change, cache should be cleared.
+    expect(layer._pathCache.size).toBe(0);
+    expect(layer._key).toBe("9:0:0"); // view key updated
+  });
+
+  it("_reset cache is NOT cleared when view key remains the same", () => {
+    const L = makeStubLeaflet();
+    const RadarLayer = makeRadarLayerClass(L);
+    const layer = new RadarLayer();
+    layer.initialize();
+
+    const map = Object.create(L.StubMap);
+    layer._map = map;
+    layer._canvas = L.DomUtil.create();
+    layer._key = "8:0:0";
+    layer._origin = { x: 0, y: 0 };
+    layer._viewKey = function() {
+      return `${this._map.getZoom()}:${this._map.getPixelOrigin().x}:${this._map.getPixelOrigin().y}`;
+    };
+
+    const makeAreas = () => [
+      {
+        color: "#000000",
+        verts: new Float32Array([47.5, 8.5, 47.6, 8.6]),
+        rings: new Int32Array([0, 4]),
+      },
+    ];
+
+    // Populate cache.
+    layer._getPaths("frame-1", makeAreas());
+    expect(layer._pathCache.size).toBe(1);
+
+    // Call _reset() without changing the view key.
+    layer._reset();
+
+    // Cache should still have entries.
+    expect(layer._pathCache.size).toBe(1);
+    expect(layer._pathCache.has("frame-1")).toBe(true);
   });
 });
