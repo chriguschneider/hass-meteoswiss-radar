@@ -8,6 +8,14 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- CI: `.github/workflows/release.yml`, the tag-triggered release gate ADR-0004
+  specified but that was never written. On a `v*` tag it asserts the tag
+  against `manifest.json`, refuses to overwrite an existing release, extracts
+  the matching `CHANGELOG.md` section as release notes, and publishes. v0.12.0
+  was the last release cut by hand (#170)
+
 ## [v0.12.0] — 2026-08-25
 
 ### Added
