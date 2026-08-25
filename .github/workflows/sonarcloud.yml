@@ -40,6 +40,30 @@ jobs:
       - name: Pytest with coverage
         run: pytest -q --cov=custom_components --cov-report=xml
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      # The card holds ~2200 of the project's coverable lines. Without this
+      # the scanner finds no lcov, reports the whole file as uncovered, and
+      # the gate fails on new_coverage no matter how good the Python side is.
+      - name: Vitest with coverage
+        run: npm run coverage
+
+      # Sonar only *warns* when a configured report path is missing, so a
+      # silently absent lcov would look like "the card is untested" rather
+      # than "the report never got written". Fail here instead.
+      - name: Assert the JS coverage report exists
+        run: |
+          set -euo pipefail
+          if [ ! -s coverage/lcov.info ]; then
+            echo "::error::coverage/lcov.info is missing or empty; sonar-project.properties expects it."
+            exit 1
+          fi
+          echo "lcov.info: $(wc -l < coverage/lcov.info) lines"
+
       - name: SonarCloud scan
         uses: SonarSource/sonarqube-scan-action@v8.2.1
         env:
