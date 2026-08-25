@@ -1,0 +1,135 @@
+name: Release
+
+# ADR-0004: a pushed tag must not become a release on its own. Two ways a
+# manual release has gone wrong here before, both caught by this gate:
+#
+#   - 0.7.6 and 0.8.0 were tagged 19 minutes apart with identical titles.
+#   - v0.11.0 was tagged before the brand/ folder landed (#84), so the
+#     published release shipped no icon while master claimed it did.
+#
+# The tag is therefore checked against the tree it actually points at, and
+# release notes must already exist in CHANGELOG.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Verify tag and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The annotated tag object carries the release title (see below),
+          # and it is not present in a shallow clone of the commit alone.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install pytest
+
+      # File-to-file version sync and "a changelog section exists for the
+      # declared version" are already asserted by the test suite. Reuse it
+      # rather than re-deriving five version strings in shell.
+      - name: Version files and changelog agree
+        run: pytest -q tests/test_metadata.py tests/test_changelog.py
+
+      - name: Tag matches the declared version
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          declared="$(python -c 'import json,pathlib;print(json.loads(pathlib.Path("custom_components/meteoswiss_radar/manifest.json").read_text(encoding="utf-8"))["version"])')"
+          if [ "$version" != "$declared" ]; then
+            echo "::error::Tag $tag declares version $version, but manifest.json says $declared."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::A release for ${{ steps.version.outputs.tag }} already exists. Delete it first, or tag a new version."
+            exit 1
+          fi
+
+      - name: Extract the changelog section
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, sys
+
+          version = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          # Both header forms occur: bare up to 0.8.0, v-prefixed from v0.9.0
+          # onward (ADR-0004). tests/test_changelog.py accepts both too.
+          # Stops at the next section header, at the link-definition block
+          # that closes the file, or at EOF -- otherwise the oldest section
+          # would swallow every "[x.y.z]: https://..." line below it.
+          pattern = (
+              rf"^## \[v?{re.escape(version)}\][^\n]*\n"
+              r"(.*?)(?=^## \[|^\[[^\]]+\]: |\Z)"
+          )
+          match = re.search(pattern, text, re.S | re.M)
+          if match is None:
+              sys.exit(f"::error::CHANGELOG.md has no '## [{version}]' section.")
+          notes = match.group(1).strip()
+          if not notes:
+              sys.exit(f"::error::The '## [{version}]' section in CHANGELOG.md is empty.")
+          pathlib.Path("release-notes.md").write_text(notes + "\n", encoding="utf-8")
+          print(f"Extracted {len(notes.splitlines())} lines of release notes.")
+          PY
+
+      # Releases here are titled "<tag> — <what changed>" (e.g. "v0.11.0 —
+      # radar overlay layers"). Nothing in the repo can derive that phrase,
+      # so it comes from the annotated tag's own message:
+      #     git tag -a v0.13.0 -m "radar overlay layers"
+      # Only annotated tags are consulted: for a lightweight one,
+      # %(contents:subject) silently falls through to the commit subject,
+      # which would title the release "chore(release): ... (#65)".
+      - name: Build the release title
+        id: title
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if [ "$(git cat-file -t "$tag")" = "tag" ]; then
+            subject="$(git tag -l --format='%(contents:subject)' "$tag")"
+          else
+            subject=""
+          fi
+          # Tolerate a message that already repeats the tag, so
+          # `-m "v0.13.0 — foo"` yields one "v0.13.0 —", not two.
+          subject="${subject#"$tag"}"
+          subject="${subject#" — "}"
+          subject="${subject#" - "}"
+          subject="${subject#": "}"
+          subject="${subject#" "}"
+          if [ -n "$subject" ]; then
+            title="$tag — $subject"
+          else
+            title="$tag"
+          fi
+          echo "Release title: $title"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      # No assets: HACS downloads the repository zip for integrations.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.title.outputs.title }}" \
+            --notes-file release-notes.md \
+            --verify-tag
