@@ -78,6 +78,31 @@ After a Home Assistant restart the icon appears on the integration page
 and in HACS. It is served by the running instance rather than by the CDN,
 so the check is against your own install, not `brands.home-assistant.io`.
 
+The endpoint is `/api/brands/integration/{domain}/{image}`. It requires
+auth: either a Bearer token, or a short-lived token from the
+`brands/access_token` websocket command as `?token=`. Two query details
+matter when checking by hand:
+
+- `placeholder=no` disables the fallback image, so a 200 proves the real
+  file was found rather than a generic placeholder.
+- Requesting a domain that has no `brand/` folder returns 404 with that
+  flag — useful as a control.
+
+```sh
+curl -s -o served.png -w '%{http_code} %{size_download}\n' \
+  "http://homeassistant.local:8123/api/brands/integration/meteoswiss_radar/icon.png?token=$TOKEN&placeholder=no"
+# then compare: git hash-object served.png
+#                 vs custom_components/meteoswiss_radar/brand/icon.png
+```
+
+Verified this way on 2026-08-25 against a Pi running core-2026.8.3: both
+`icon.png` and `icon@2x.png` returned 200 byte-identical to the committed
+files, and an unknown domain returned 404.
+
+Home Assistant decides an integration has branding purely by the folder's
+presence — `has_branding` is `"brand" in _top_level_files` in
+`homeassistant/loader.py`. Renaming the folder silently disables it.
+
 Users on Home Assistant older than 2026.3 do not get the brands proxy API
 and will still see the puzzle piece. The integration itself supports
 2024.7.0+, so this is a graceful degradation, not a hard requirement.
