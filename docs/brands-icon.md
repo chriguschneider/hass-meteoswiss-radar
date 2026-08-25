@@ -10,8 +10,12 @@ integration and prefers it over the
 [`home-assistant/brands`](https://github.com/home-assistant/brands) CDN —
 see the [Brands Proxy API announcement](https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api).
 The `custom_integrations/` folder in the brands repository is explicitly
-labelled a legacy path in that repo's own README, so **we do not submit a
-PR there.**
+labelled a legacy path in that repo's own README, and **that route is now
+closed** — see "The brands repository will not take us" below. The `brand/`
+folder is not the preferred option; it is the only one.
+
+It does not cover every surface. Home Assistant's own UI renders it; the
+HACS store list does not — see "Where the icon does and does not appear".
 
 No `manifest.json` change is involved. The files are the whole mechanism:
 
@@ -72,11 +76,53 @@ PNGs at exactly 256×256 and 512×512.
 dimensions, so a missing or malformed icon fails CI rather than silently
 degrading every user to the puzzle piece.
 
+## Where the icon does and does not appear
+
+Two surfaces, two different sources. This was wrong in an earlier revision
+of this document, which claimed the icon shows "on the integration page and
+in HACS".
+
+| Surface | Fetches from | Result |
+| --- | --- | --- |
+| Settings → Devices & Services | `/api/brands/integration/{domain}/icon.png` on the running instance | ✅ our icon |
+| Add-integration dialog | same | ✅ our icon |
+| **HACS store list** | `https://brands.home-assistant.io/_/{domain}/icon.png` — the **CDN**, not the instance | ❌ placeholder |
+
+The HACS case is easy to misdiagnose, because the CDN does not 404 for an
+unknown domain on that path. It answers **200 with a picture that reads
+"icon not available"** — 3039 bytes, byte-identical to what any other
+brands-less custom integration gets. So there is no failed request to find
+in devtools; the placeholder *is* the successful response.
+
+Measured on a live instance (2026-08-25, core-2026.8.3, HACS 2.0.5):
+
+```
+/api/brands/integration/meteoswiss_radar/icon.png?placeholder=no    → 200  20232 bytes
+/api/brands/integration/meteoswiss_radar/icon@2x.png?placeholder=no → 200  61849 bytes
+/api/brands/integration/no_such_domain_xyz/icon.png?placeholder=no  → 404   (control)
+
+https://brands.home-assistant.io/_/meteoswiss_radar/icon.png        → 200  3039 bytes  (placeholder)
+```
+
+Byte counts match the committed files exactly, so a 200 here proves the real
+file was served rather than a fallback.
+
+This is a known HACS limitation, not a fault in our setup:
+[`hacs/frontend#936`](https://github.com/hacs/frontend/issues/936) (closed,
+diagnosed: `hacs-dashboard.ts` calls `brandsUrl({useFallback: true})`, which
+always goes to the CDN), plus `hacs/integration` #5171, #5179, #5223 and
+#5402, all open since March 2026. The fix in flight is
+[`hacs/integration#5388`](https://github.com/hacs/integration/pull/5388) — a
+`/api/hacs/repository/{id}/icon.png` endpoint that serves downloaded
+integrations from the local brand folder. Still unmerged as of 2026-08-25,
+and the newest HACS release is 2.0.5 from January 2025.
+
+Nothing on our side changes this. Do not go looking for a bug here.
+
 ## Verifying
 
-After a Home Assistant restart the icon appears on the integration page
-and in HACS. It is served by the running instance rather than by the CDN,
-so the check is against your own install, not `brands.home-assistant.io`.
+The icon is served by the running instance rather than by the CDN, so the
+check is against your own install, not `brands.home-assistant.io`.
 
 The endpoint is `/api/brands/integration/{domain}/{image}`. It requires
 auth: either a Bearer token, or a short-lived token from the
@@ -141,12 +187,30 @@ One consequence for CI: the same page requires the HACS action to pass
 brands repo, and leaving it in would have disqualified the submission
 even though the check now passes on its own merits.
 
-## Superseded approach
+## The brands repository will not take us
 
 Earlier revisions of this document described forking
 `home-assistant/brands` and adding the icons under
-`custom_integrations/meteoswiss_radar/`, and #163 turned those steps into
-a runnable `gh` block. That path still works, but it is no longer the one
-we take: it needs a PR against a foreign repository and a review round to
-reach the same result the `brand/` folder delivers on the next restart,
-and the brands repo's own README now labels that folder legacy.
+`custom_integrations/meteoswiss_radar/`, and #163 turned those steps into a
+runnable `gh` block. A later revision called that path "superseded" but said
+it "still works". **It does not.** Verified 2026-08-25:
+
+- The repository's own pull-request template opens with:
+  *"Pull requests for adding new custom components will no longer be
+  accepted."*
+- Its "Type of change" checklist has no option that fits — every entry is
+  about a **core** integration.
+- Every recent submission of this shape was closed unmerged. In the five days
+  to 2026-08-25 alone: #11016, #11017, #11018, #11019, #11020, #11021, #11023,
+  #11024, #11025, #11026, #11027, #11028, #11029, #11030, #11031 — two of them
+  closed the same day they were opened.
+- The last merged *addition* under `custom_integrations/` was #10172 on
+  2026-04-20. Everything merged there since has been a removal or a move.
+
+So the `brand/` folder is not a shortcut we chose over a review round. It is
+the only route that exists, and opening a brands PR would just join a queue
+of same-day rejections.
+
+The practical consequence is the HACS gap above: until
+`hacs/integration#5388` lands, the HACS store list shows a placeholder and
+there is no action available to us that changes it.

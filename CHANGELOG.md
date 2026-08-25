@@ -8,6 +8,18 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/brands-icon.md`: correct two claims that were wrong. The icon does
+  **not** appear in HACS — only Home Assistant's own UI reads the in-repo
+  `brand/` folder, while the HACS store list fetches
+  `brands.home-assistant.io/_/{domain}/icon.png` and gets a 200 response
+  carrying an "icon not available" picture. And the `home-assistant/brands`
+  route is not merely superseded, it is closed: that repo's PR template
+  refuses new custom components and 15 such PRs were rejected in the five days
+  to 2026-08-25. Records the live measurements and the HACS-side fix in
+  flight (`hacs/integration#5388`) (#84)
+
 ### Added
 
 - CI: `.github/workflows/release.yml`, the tag-triggered release gate ADR-0004
