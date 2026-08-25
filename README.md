@@ -1,137 +1,127 @@
-# hass-meteoswiss-radar
+<h1 align="center">MeteoSwiss Radar</h1>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/blob/master/LICENSE)
-[![GitHub Release](https://img.shields.io/github/release/chriguschneider/hass-meteoswiss-radar.svg)](https://github.com/chriguschneider/hass-meteoswiss-radar/releases)
-[![CI Status](https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master)](https://github.com/chriguschneider/hass-meteoswiss-radar/actions)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=chriguschneider_hass-meteoswiss-radar&metric=alert_status)](https://sonarcloud.io/summary/overall?id=chriguschneider_hass-meteoswiss-radar&branch=master)
-[![hacs](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
+<p align="center"><em>The app's radar, on your dashboard.</em></p>
 
-MeteoSwiss precipitation radar for Home Assistant: a custom integration that
-proxies the MeteoSwiss app API (their endpoints send no CORS headers) and
-ships a Lovelace card rendering the radar on a swisstopo basemap with Leaflet.
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
+  <a href="https://hacs.xyz/"><img alt="HACS Custom" src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/chriguschneider/hass-meteoswiss-radar" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master&label=CI" /></a>
+  <a href="https://sonarcloud.io/summary/overall?id=chriguschneider_hass-meteoswiss-radar&branch=master"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=chriguschneider_hass-meteoswiss-radar&metric=alert_status" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/chriguschneider/hass-meteoswiss-radar/total" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/chriguschneider/hass-meteoswiss-radar" /></a>
+  <a href="#ai-assisted-development"><img alt="AI Assisted" src="https://img.shields.io/badge/AI-assisted-2196F3.svg" /></a>
+</p>
 
-**Status: work in progress.** The card plays the full radar animation —
-~12 h of measurement into ~28 h of INCA forecast — with play/pause, a
-flat scrubbing timeline in the HA accent color with hour/date labels, a
-measurement/forecast label and an intensity legend overlay, centered on
-your home location. The frame list refreshes itself while the
-card is open, and upstream breakage degrades to a clean banner instead of a
-broken card.
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=chriguschneider&repository=hass-meteoswiss-radar&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open in HACS" /></a>
+  &nbsp;·&nbsp;
+  <a href="docs/CONFIGURATION.md">Configuration</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/issues">Issues</a>
+  &nbsp;·&nbsp;
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-## Screenshot
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/chriguschneider/hass-meteoswiss-radar/master/docs/images/card.png"
+    alt="The card showing a forecast frame over western Switzerland, with the intensity legend, the overlay layers, and the scrubbing timeline"
+    width="440"
+  />
+</p>
 
-<!--
-  TODO(#18): drop a real card capture at docs/images/card.png and uncomment
-  the line below. Kept as a comment so the HACS store page never renders a
-  broken image. A live Home Assistant render is required, which cannot be
-  produced from CI.
--->
-<!-- ![MeteoSwiss Radar card](docs/images/card.png) -->
+If you live in Switzerland, the MeteoSwiss app's radar loop is probably what you
+check before hanging the laundry outside. This puts that same loop on your Home
+Assistant dashboard.
 
-## How it works
+- **The whole animation.** About 12 h of measured radar running straight into
+  ~28 h of forecast, as one timeline. Play it, or drag to any moment.
+- **Lightning, snow, sleet and freezing rain** as optional overlays, same as the
+  app's own toggles.
+- **Centred on your home**, with the intensity legend in mm/h.
+- **No YAML needed.** There's a visual editor, and the defaults just work.
+- **When MeteoSwiss changes something upstream**, you get a small banner
+  instead of a broken map.
 
-- `custom_components/meteoswiss_radar/` registers an authenticated HTTP proxy
-  (`/api/meteoswiss_radar/proxy/...`, allowlisted MeteoSwiss paths only) and
-  serves the card bundle, auto-registered on every dashboard — no manual
-  resource entry needed, YAML-mode dashboards included.
-- The card fetches the radar frames through the proxy and decodes the
-  chain-code polygon format documented in [FORMAT.md](FORMAT.md).
+## Install
 
-## Requirements
-
-- **Home Assistant 2024.7.0 or newer.** The integration uses
-  `StaticPathConfig` / `async_register_static_paths` and
-  `remove_extra_js_url` (all 2024.7) plus `ConfigFlowResult` (2024.4); older
-  installs fail at import with a cryptic `ImportError`.
-
-## Install (HACS)
-
-Not in the default HACS store yet. Add it as a custom repository using the button below, or follow the manual steps:
+Not in the default HACS store yet, so add it as a custom repository:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=chriguschneider&repository=hass-meteoswiss-radar&category=integration)
 
-**Manual setup:**
+Or by hand: HACS → ⋮ → **Custom repositories** →
+`https://github.com/chriguschneider/hass-meteoswiss-radar`, category
+**Integration**. Then **Download**, restart Home Assistant, and add the
+integration under Settings → Devices & Services.
 
-1. HACS → three-dot menu → **Custom repositories**.
-2. Repository: `https://github.com/chriguschneider/hass-meteoswiss-radar`,
-   category: **Integration**. Add.
-3. Open **MeteoSwiss Radar** in HACS and **Download** it.
-4. **Restart Home Assistant.**
-5. Settings → Devices & Services → **Add Integration** → "MeteoSwiss Radar".
-6. Add the card to a dashboard:
+Finally, drop the card on a dashboard:
 
 ```yaml
 type: custom:meteoswiss-radar-card
 ```
 
-The card JS is **auto-injected into every dashboard for every user** — the
-integration registers it as a frontend resource on setup, so there is no
-manual resource entry to add (YAML-mode dashboards included). By the same
-token, **uninstalling requires a Home Assistant restart** to fully unload
-the integration and stop serving the card.
+That's the whole config — it finds your home location by itself. Everything else
+is optional and lives in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-### Install (manual)
+Needs Home Assistant **2024.7.0 or newer**. Uninstalling needs a restart,
+because the integration serves the card as a frontend resource.
 
-1. Copy `custom_components/meteoswiss_radar/` into your HA `config/custom_components/`.
-2. Restart Home Assistant.
-3. Settings → Devices & Services → Add Integration → "MeteoSwiss Radar".
-4. Add the card as shown above.
+## Overlay layers
 
-The card has a **visual editor** (dashboard card options UI); every option
-below can also be set there. The play button cycles three modes: paused ->
-play the configured window (looping) -> play the full timeline.
+Four optional layers, switched on per card in the editor or in YAML:
 
-### Options
+```yaml
+type: custom:meteoswiss-radar-card
+layer_lightning: true
+layer_snow: true
+```
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `height` | `400` | Map height in px. |
-| `zoom` | `8` | Initial map zoom. |
-| `center` | home location | `[lat, lon]` map center; the house marker follows the home location regardless. |
-| `frame_duration` | `300` | Milliseconds per animation frame. |
-| `frame_stride` | `1` | Play every Nth frame — raise on slow devices. |
-| `past_hours` | full range | Hours of measurement history to keep on the timeline. |
-| `forecast_hours` | full range | Hours of forecast to keep; `0` gives a measurement-only card. |
-| `autoplay_mode` | `off` | `off`, `window` (play the configured window on open, looping) or `full` (play the whole timeline). |
-| `play_past_hours` | `1` | Play window: hours of history before now. |
-| `play_forecast_hours` | `8` | Play window: hours of forecast after now. |
-| `play_forecast_until` | – | Play window: clock time ("20:00") to play at least until — the longer of this and `play_forecast_hours` wins. |
-| `legend` | `true` | Show the intensity legend (mm/h) overlay on the map. |
-| `attribution` | `true` | Show the "Source: MeteoSwiss · © swisstopo" chip at the bottom center of the map. The swisstopo basemap license requires attribution — disable only for private use at your own discretion. |
-| `time_axis` | `true` | Hour and date label rows under the timeline track. |
-| `large_label` | `true` | Big date/time label on the map with a Measurement/Forecast line. |
+One thing surprises people, so it's worth saying up front: **lightning only
+exists on past frames, and snow, sleet and freezing rain only on forecast
+frames.** That's how MeteoSwiss publishes it — they don't predict lightning, and
+they don't record precipitation type. So a snow overlay shows nothing while you
+scrub through recorded radar, and lightning vanishes the moment you cross into
+the forecast. The app behaves the same way.
 
-### Overlay layers
+## How it works
 
-Four optional layers can be enabled per card. An enabled layer is always shown and adds a legend swatch; layers are switched in the card configuration (UI editor chips or YAML), not on the map.
+The integration proxies the MeteoSwiss app API, because those endpoints send no
+CORS headers and a browser simply can't call them. The proxy sits behind Home
+Assistant's auth and only reaches an allowlist of MeteoSwiss paths, so it can't
+be turned into an open relay.
 
-| Config key | Legend label | What it shows |
-| --- | --- | --- |
-| `layer_snow: true` | Snow | INCA snow-type contours |
-| `layer_snowrain: true` | Sleet | INCA sleet-type contours |
-| `layer_freezing_rain: true` | Freezing rain | INCA freezing-rain-type contours |
-| `layer_lightning: true` | Lightning | Strike points from the MeteoSwiss lightning product |
+The card then draws the radar contours onto a swisstopo basemap with Leaflet. If
+you want the details — the reverse-engineered wire format, the architecture
+decisions — see [FORMAT.md](FORMAT.md) and [docs/adr/](docs/adr/).
 
-The `layer_<x>_on` keys from v0.10.0 are obsolete and ignored (enabled now means visible).
+## Contributing
 
-**Snow and Sleet note:** precipitation-type predictions exist only for future (forecast) frames. The overlays are empty on all measurement frames — the map shows nothing while viewing recorded data, matching the app's own behavior.
+Issues and PRs welcome. [AGENTS.md](AGENTS.md) has the working agreement, and
+`npm test` / `python -m pytest -q` run the two suites.
 
-**Lightning note:** strike data exists only for past (measurement) frames. The lightning overlay is empty on all forecast frames and shows nothing during storm-free periods — this matches the app's own behavior.
-
-## Attribution
-
-Radar data: [MeteoSwiss](https://www.meteoschweiz.admin.ch). Basemap:
-[swisstopo](https://www.swisstopo.admin.ch). This project is not affiliated
-with either. Map rendering: [Leaflet](https://leafletjs.com) (vendored).
+Corrections to [FORMAT.md](FORMAT.md) are especially welcome — the format is
+reverse-engineered, so if something looks wrong there, it probably is.
 
 ## AI-assisted development
 
-This project leverages AI assistants (Claude, Codex, or other models) for
-development, testing, and documentation. Commits made with AI assistance carry
-a `Co-Authored-By:` trailer naming the tool and model used, ensuring
-transparency in the contribution history.
+Built by Chrigu & Claude — a human and an LLM working together. The architecture
+calls, the trade-offs and the reverse-engineering are mine; a good share of the
+typing, refactors and test scaffolding was
+[Claude Code](https://claude.com/claude-code).
 
-## License
+AI-assisted commits carry a `Co-Authored-By:` trailer, so the history stays
+honest. The badge is there because being upfront about how software gets made
+beats pretending otherwise.
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE)
-file for details.
+## Attribution & licence
+
+Radar data from [MeteoSwiss](https://www.meteoschweiz.admin.ch), basemap from
+[swisstopo](https://www.swisstopo.admin.ch), rendering by
+[Leaflet](https://leafletjs.com). An independent community project — not
+affiliated with or endorsed by either agency.
+
+The swisstopo licence requires the attribution chip on the map. There's an
+option to hide it, but think twice before doing that publicly.
+
+MIT — see [LICENSE](LICENSE).
