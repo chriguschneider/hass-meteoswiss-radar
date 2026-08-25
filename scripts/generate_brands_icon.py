@@ -1,32 +1,37 @@
 #!/usr/bin/env python3
-"""Generate the home-assistant/brands icon set for this integration.
+"""Regenerate the brand icon set shipped with this integration.
 
-The integration shows the default puzzle-piece icon in Home Assistant and
-HACS until an entry exists in the ``home-assistant/brands`` repository
-(issue #84). This helper produces the two PNGs that repository requires
-from the *official MeteoSwiss app icon*:
+Home Assistant shows the default puzzle-piece icon until brand images
+exist for the domain (issue #84). Since HA 2026.3 a custom integration
+can ship them itself in a ``brand/`` folder, which the brands proxy API
+serves in preference to the brands CDN -- no PR against the
+``home-assistant/brands`` repository required. This script produces the
+two PNGs that folder needs from the *official MeteoSwiss app icon*:
 
 - ``icon.png``    - 256x256
 - ``icon@2x.png`` - 512x512
 
-We deliberately do not commit the resulting PNGs here: they are a
-trademarked logo whose proper home is the ``home-assistant/brands`` PR,
-not this repository's history. Run this script to (re)produce them, then
-follow ``docs/brands-icon.md`` to open the brands PR.
+The generated files ARE committed, to
+``custom_components/meteoswiss_radar/brand/``: that folder is the
+delivery mechanism, so the icons have to be in the release artifact.
+This script exists to reproduce them when the app icon changes, not as a
+build step -- nothing calls it automatically.
 
 The source is the App Store artwork for the official MeteoSwiss app
 (``ch.admin.meteoswiss``, publisher "Federal Office of Meteorology and
 Climatology MeteoSwiss"), looked up via the public iTunes Search API. The
 artwork is a fully square, opaque icon with no rounded-corner alpha baked
-in, which is exactly what brands wants (the HA frontend applies its own
+in, which is exactly what is wanted here (the HA frontend applies its own
 masking).
 
 Usage::
 
     pip install Pillow
-    python scripts/generate_brands_icon.py --out build/brands
+    python scripts/generate_brands_icon.py
 
-Requires network access and Pillow. Standard library otherwise.
+Writes into the shipped ``brand/`` folder by default; pass ``--out`` to
+render somewhere else for inspection. Requires network access and
+Pillow. Standard library otherwise.
 """
 
 from __future__ import annotations
@@ -48,8 +53,16 @@ SEARCH_URL = (
 )
 USER_AGENT = "hass-meteoswiss-radar brands-icon-generator (issue #84)"
 
-# home-assistant/brands required outputs: (filename, edge length in px).
+# Required outputs: (filename, edge length in px).
 OUTPUTS = (("icon.png", 256), ("icon@2x.png", 512))
+
+# The shipped brand folder, served by the HA brands proxy API (HA 2026.3+).
+BRAND_DIR = (
+    Path(__file__).resolve().parent.parent
+    / "custom_components"
+    / "meteoswiss_radar"
+    / "brand"
+)
 
 
 def _get(url: str) -> bytes:
@@ -87,8 +100,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out",
-        default="build/brands",
-        help="Output directory (default: build/brands)",
+        default=str(BRAND_DIR),
+        help=f"Output directory (default: {BRAND_DIR})",
     )
     parser.add_argument(
         "--source-url",
@@ -123,8 +136,8 @@ def main() -> int:
         print(f"Wrote {path} ({edge}x{edge})")
 
     print(
-        "\nDone. Next: copy these into a home-assistant/brands fork under "
-        "custom_integrations/meteoswiss_radar/ and open the PR. "
+        "\nDone. Commit the result if you rendered into the shipped brand "
+        "folder; Home Assistant picks it up on the next restart. "
         "See docs/brands-icon.md."
     )
     return 0

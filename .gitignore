@@ -15,8 +15,9 @@ node_modules/
 npm-debug.log*
 coverage/
 
-# Generated brands icon set (trademarked logo; lives in the brands PR,
-# not this repo's history). See scripts/generate_brands_icon.py.
+# Scratch output for scripts/generate_brands_icon.py. The shipped icon set
+# lives in custom_components/meteoswiss_radar/brand/ and IS committed --
+# the brands proxy API serves it from there (see docs/brands-icon.md).
 /build/
 
 # Machine-local Claude notes (shared conventions live in AGENTS.md)
