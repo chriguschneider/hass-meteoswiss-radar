@@ -65,7 +65,8 @@ _ALLOWED_PATHS = (
 
 _UPSTREAM_TIMEOUT = ClientTimeout(total=20)
 _MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MB hard ceiling per response
-_VERSIONS_TTL = 60.0  # seconds between re-fetches of versions.json
+_VERSIONS_TTL = 60.0  # seconds between re-fetches of the versions manifest
+_VERSIONS_JSON = "versions.json"
 
 
 def _accepts_gzip(accept_encoding: str) -> bool:
@@ -160,7 +161,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
     # ------------------------------------------------------------------
 
     def _cache_get(self, tail: str) -> bytes | None:
-        if tail.endswith("versions.json"):
+        if tail.endswith(_VERSIONS_JSON):
             if self._versions_cache is not None:
                 ts, body = self._versions_cache
                 if time.monotonic() - ts < _VERSIONS_TTL:
@@ -172,7 +173,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         return None
 
     def _cache_put(self, tail: str, data: bytes) -> None:
-        if tail.endswith("versions.json"):
+        if tail.endswith(_VERSIONS_JSON):
             # versions.json uses the TTL cache; store raw bytes only.
             self._versions_cache = (time.monotonic(), data)
         else:
@@ -261,7 +262,7 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         """
         status, body = await self._fetch(tail)
         if status == 200 and body is not None:
-            if tail.endswith("versions.json"):
+            if tail.endswith(_VERSIONS_JSON):
                 # versions.json is TTL-cached as raw bytes; no gzip needed here.
                 self._cache_put(tail, body)
                 return (status, body)
@@ -293,12 +294,12 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         # requires Cache-Control: private to prevent shared-cache exposure.
         cache = (
             "no-store"
-            if tail.endswith("versions.json")
+            if tail.endswith(_VERSIONS_JSON)
             else "private, max-age=86400, immutable"
         )
         headers: dict[str, str] = {"Cache-Control": cache}
         response_body: bytes
-        if tail.endswith("versions.json"):
+        if tail.endswith(_VERSIONS_JSON):
             # Raw bytes; let aiohttp negotiate compression via enable_compression().
             response_body = body
             serve_pregzipped = False
@@ -361,14 +362,15 @@ class MeteoSwissRadarCardView(HomeAssistantView):
 # resolve a filesystem path. Only these relative paths may be served -- an
 # allowlist, not the disk layout, is the security boundary (mirrors the proxy
 # allowlist in ADR-0001). The extension also fixes the Content-Type.
+_CT_PNG = "image/png"
 _VENDOR_FILES = {
     "leaflet.js": "text/javascript",
     "leaflet.css": "text/css",
-    "images/layers.png": "image/png",
-    "images/layers-2x.png": "image/png",
-    "images/marker-icon.png": "image/png",
-    "images/marker-icon-2x.png": "image/png",
-    "images/marker-shadow.png": "image/png",
+    "images/layers.png": _CT_PNG,
+    "images/layers-2x.png": _CT_PNG,
+    "images/marker-icon.png": _CT_PNG,
+    "images/marker-icon-2x.png": _CT_PNG,
+    "images/marker-shadow.png": _CT_PNG,
 }
 
 
