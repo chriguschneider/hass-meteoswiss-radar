@@ -9,7 +9,9 @@
   <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master&label=CI" /></a>
   <a href="https://sonarcloud.io/summary/overall?id=chriguschneider_hass-meteoswiss-radar&branch=master"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=chriguschneider_hass-meteoswiss-radar&metric=alert_status" /></a>
   <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/chriguschneider/hass-meteoswiss-radar/total" /></a>
-  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/chriguschneider/hass-meteoswiss-radar" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/chriguschneider/hass-meteoswiss-radar?style=flat&label=stars" /></a>
+  <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/commits/master"><img alt="Last commit" src="https://img.shields.io/github/last-commit/chriguschneider/hass-meteoswiss-radar" /></a>
+  <a href="https://buymeacoffee.com/chriguschneider"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00.svg" /></a>
   <a href="#ai-assisted-development"><img alt="AI Assisted" src="https://img.shields.io/badge/AI-assisted-2196F3.svg" /></a>
 </p>
 
@@ -113,6 +115,10 @@ typing, refactors and test scaffolding was
 AI-assisted commits carry a `Co-Authored-By:` trailer, so the history stays
 honest. The badge is there because being upfront about how software gets made
 beats pretending otherwise.
+
+If the card earned a spot on your dashboard,
+[a coffee](https://buymeacoffee.com/chriguschneider) is a nice way to say
+thanks. (Claude doesn't drink coffee. More for me.)
 
 ## Attribution & licence
 
