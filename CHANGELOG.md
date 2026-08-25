@@ -17,6 +17,19 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   the `home-assistant/brands` CDN, so no PR against that repository is
   needed. Installs on HA older than 2026.3 keep the puzzle piece (#84)
 
+### HACS default store prerequisites verified (#85)
+
+All in-repo prerequisites for the HACS default store submission are met:
+`hacs.json` name present, `manifest.json` with `issue_tracker`/`codeowners`/`version`,
+tagged GitHub release (v0.11.0), `hassfest` and `hacs/action` green on master.
+Open items requiring owner action outside this repo:
+- Add the `integration` GitHub topic (current topics lack it; needs owner access)
+- Confirm whether the brands proxy API (`brand/` folder) satisfies the HACS default
+  store brands requirement, or whether a `home-assistant/brands` PR is still required
+  (see `docs/brands-icon.md` § "Relationship to the HACS default store")
+- Fork `hacs/default`, add `chriguschneider/hass-meteoswiss-radar` to the integration
+  list alphabetically, and open the PR
+
 ## [v0.11.0] — 2026-08-24
 
 ### Changed
