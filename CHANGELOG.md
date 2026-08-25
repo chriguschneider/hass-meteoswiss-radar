@@ -8,6 +8,8 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+## [v0.12.0] — 2026-08-25
+
 ### Added
 
 - Integration: ship the official MeteoSwiss brand icon in
@@ -25,13 +27,20 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   `custom_components/meteoswiss_radar/brand/icon.png` in the repository tree
   and only falls back to the `home-assistant/brands` CDN when that is absent
   (#85)
+- CI: add the SonarCloud quality gate workflow that ADR-0007 decided but
+  #134 never wrote (#165)
 
 ### Documentation
 
+- README: restructured to the `weather-station-card` layout, with the card
+  screenshot (`docs/images/card.png`) no longer a commented-out placeholder,
+  and the option reference split out into `docs/CONFIGURATION.md` (#161)
 - `docs/brands-icon.md`: the open question of whether HACS still demands a
   `home-assistant/brands` entry is answered — it does not, the in-repo `brand/`
   folder satisfies it, so #84 unblocks #85. Records the validator source and
   the no-ignores rule behind the CI change (#85)
+- `docs/brands-icon.md`: verified icon generator and a runnable `gh` block for
+  the brands submission (#84)
 
 ## [v0.11.0] — 2026-08-24
 
@@ -151,7 +160,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.12.0...HEAD
+[v0.12.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.11.0...v0.12.0
 [v0.11.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.10.0...v0.11.0
 [v0.10.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...v0.10.0
 [v0.9.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/0.8.0...v0.9.0
