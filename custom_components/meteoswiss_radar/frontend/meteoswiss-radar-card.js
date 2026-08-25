@@ -564,9 +564,9 @@ class MeteoSwissRadarCard extends HTMLElement {
       attribution: true,
       time_axis: true,
       large_label: true,
-      ...(config || {}),
+      ...config,
     };
-    if ((config || {}).autoplay === true && !(config || {}).autoplay_mode) {
+    if (config?.autoplay === true && !config?.autoplay_mode) {
       this._config.autoplay_mode = "full"; // legacy autoplay: true
     }
     // Validate and coerce zoom to [6, 15], default 8
@@ -797,7 +797,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   _countActiveProducts() {
     let n = 1; // rate is always fetched
     for (const key of OVERLAY_ORDER) {
-      if (this._config && this._config[OVERLAY_CONFIG_KEY[key]]) n++;
+      if (this._config?.[OVERLAY_CONFIG_KEY[key]]) n++;
     }
     return n;
   }
@@ -1211,9 +1211,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     const animation = await this._api(
       `product/output/precipitation/animation/version__${version}/de/animation.json`
     );
-    const pictures = (animation.map_images && animation.map_images[0]
-      ? animation.map_images[0].pictures
-      : []) || [];
+    const pictures = animation.map_images?.[0]?.pictures || [];
     let frames = pictures
       .filter(
         (p) =>
@@ -1254,8 +1252,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     // Positions map TIME, not frame index: the cadence is mixed (5-min
     // measurement, 5/10-min forecast), so index fractions drift off the axis.
     this._t0 = frames[0].ts;
-    this._span = Math.max(1, frames[frames.length - 1].ts - this._t0);
-    const lastMeas = frames.filter((f) => f.type === "measurement").pop();
+    this._span = Math.max(1, frames.at(-1).ts - this._t0);
+    const lastMeas = frames.findLast((f) => f.type === "measurement");
     const measFrac = lastMeas ? (lastMeas.ts - this._t0) / this._span : 0;
     const b = (measFrac * 100).toFixed(2);
     this._tMeas.style.width = b + "%";
@@ -1295,8 +1293,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     const hasPast = Number.isFinite(past) && past >= 0;
     const hasForecast = Number.isFinite(forecast) && forecast >= 0;
     if (!hasPast && !hasForecast) return frames;
-    const lastMeas = frames.filter((f) => f.type === "measurement").pop();
-    const anchor = lastMeas ? lastMeas.ts : frames[frames.length - 1].ts;
+    const lastMeas = frames.findLast((f) => f.type === "measurement");
+    const anchor = lastMeas ? lastMeas.ts : frames.at(-1).ts;
     const kept = frames.filter((f) => {
       if (f.type === "measurement") {
         return !hasPast || f.ts >= anchor - past * 3600;
@@ -1337,7 +1335,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!this._overlaySwatch) return;
     // Respect an explicit legend:false — the swatches live inside the legend
     // panel, so forcing it visible below would override the user's config.
-    const legendOff = this._config && this._config.legend === false;
+    const legendOff = this._config?.legend === false;
     // Collect the enabled overlays (an existing layer is always shown).
     const active = legendOff
       ? []
@@ -1390,7 +1388,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!this._config.time_axis || this._frames.length < 2) return;
     const frames = this._frames;
     const t0 = frames[0].ts;
-    const t1 = frames[frames.length - 1].ts;
+    const t1 = frames.at(-1).ts;
     const span = t1 - t0;
     const rowWidth = this._hoursRow.offsetWidth;
     this._hoursRow.textContent = "";
@@ -1477,7 +1475,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     const nearest = this._nearestIndexByTs(prevTs);
     if (this._playing) return nearest;
     const first = this._frames[0];
-    const last = this._frames[this._frames.length - 1];
+    const last = this._frames.at(-1);
     if (!first || !last) return nearest;
     if (prevTs < first.ts || prevTs > last.ts) return this._lastMeasurementIndex();
     return nearest;
@@ -1839,7 +1837,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       return;
     }
     const next = this._frames[idx + 1];
-    layer.setStrikes(strikesForFrame(this._lightningMap, f.ts, next ? next.ts : null));
+    layer.setStrikes(strikesForFrame(this._lightningMap, f.ts, next?.ts));
   }
 
   _showOverlaysForFrame(idx) {
@@ -1910,7 +1908,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   _showError(message) {
-    const el = this.shadowRoot && this.shadowRoot.getElementById("error");
+    const el = this.shadowRoot?.getElementById("error");
     if (el) {
       el.textContent = `MeteoSwiss Radar: ${message}`;
       el.hidden = false;
@@ -2079,17 +2077,18 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
   }
 
   _data() {
-    return { ...EDITOR_DEFAULTS, ...(this._config || {}) };
+    return { ...EDITOR_DEFAULTS, ...this._config };
   }
 
   _emit(config) {
     for (const key of Object.keys(config)) {
-      if (config[key] === undefined || config[key] === null || config[key] === "") {
-        delete config[key];
-      } else if (key in EDITOR_DEFAULTS && config[key] === EDITOR_DEFAULTS[key]) {
+      if (
+        config[key] === undefined || config[key] === null || config[key] === "" ||
         // Drop keys left at their default so we do not bloat the user's YAML
         // and future default changes still reach them. Non-default values
         // (including booleans set to false) survive the strict equality check.
+        (key in EDITOR_DEFAULTS && config[key] === EDITOR_DEFAULTS[key])
+      ) {
         delete config[key];
       }
     }
@@ -2112,7 +2111,7 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     form.addEventListener("value-changed", (ev) => {
       // Every form is fed the full data object, so the emitted value is
       // the full config with this form's change applied.
-      this._emit({ type: this._config.type, ...(ev.detail.value || {}) });
+      this._emit({ type: this._config.type, ...ev.detail.value });
     });
     this._forms.push(form);
     return form;
@@ -2239,24 +2238,26 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
     for (const form of this._forms) {
       if (this._hass) form.hass = this._hass;
       const def = form._sectionDef;
-      if (def && def.buildSchema && form._schemaMode !== data.autoplay_mode) {
+      if (def?.buildSchema && form._schemaMode !== data.autoplay_mode) {
         form.schema = def.buildSchema(data);
         form._schemaMode = data.autoplay_mode;
       }
       form.data = data;
     }
     if (!this._summaryEls) return;
-    const playback =
-      (data.autoplay_mode === "window"
-        ? `Window −${data.play_past_hours} h → +${data.play_forecast_hours} h` +
-          (data.play_forecast_until
-            ? ` or until ${String(data.play_forecast_until).slice(0, 5)}`
-            : "")
-        : data.autoplay_mode === "full"
-          ? "Full timeline on open"
-          : "Autoplay off") +
-      ` · ${data.frame_duration} ms` +
-      (Number(data.frame_stride) > 1 ? ` · every ${data.frame_stride}. frame` : "");
+    let playback;
+    if (data.autoplay_mode === "window") {
+      playback = `Window −${data.play_past_hours} h → +${data.play_forecast_hours} h`;
+      if (data.play_forecast_until) {
+        playback += ` or until ${String(data.play_forecast_until).slice(0, 5)}`;
+      }
+    } else if (data.autoplay_mode === "full") {
+      playback = "Full timeline on open";
+    } else {
+      playback = "Autoplay off";
+    }
+    playback += ` · ${data.frame_duration} ms`;
+    if (Number(data.frame_stride) > 1) playback += ` · every ${data.frame_stride}. frame`;
     const shown = [
       data.legend !== false && "legend",
       data.attribution !== false && "attribution",
@@ -2273,14 +2274,12 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
       }
       for (const key of Object.keys(this._chipEls)) {
         const chip = chipDefs[key];
-        const on = chip && chip.defaultOff
-          ? data[key] === true
-          : data[key] !== false;
+        const on = chip?.defaultOff ? data[key] === true : data[key] !== false;
         this._chipEls[key].classList.toggle("on", on);
       }
     }
     // Build the layers summary line.
-    if (this._summaryEls && this._summaryEls.layers) {
+    if (this._summaryEls?.layers) {
       const activeLayerLabels = OVERLAYS
         .filter(o => data[o.cfgKey] === true)
         .map(o => o.label);
