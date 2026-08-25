@@ -141,7 +141,49 @@ jobs:
           echo "Release title: $title"
           echo "title=$title" >> "$GITHUB_OUTPUT"
 
-      # No assets: HACS downloads the repository zip for integrations.
+      # ADR-0008. HACS increments a release's download counter only when it
+      # pulls a release *asset*, and it only does that when hacs.json sets
+      # zip_release with a .zip filename -- see should_try_releases in HACS'
+      # repositories/base.py. Without it an integration is installed by
+      # walking the repo tree, so the counter stays at zero however many
+      # people install. That is what happened to 0.7.6 through v0.13.0.
+      #
+      # Layout matters: the zip holds the *contents* of the integration
+      # directory at its root, not the directory itself. HACS extracts it
+      # straight into custom_components/<domain>/, so a wrapper folder would
+      # land as custom_components/meteoswiss_radar/meteoswiss_radar/ and no
+      # install would work. Verified against a working example
+      # (yandex_pogoda.zip) before adopting this.
+      - name: Package the integration
+        run: |
+          set -euo pipefail
+          cd custom_components/meteoswiss_radar
+          # -X drops extra file attributes, keeping the archive reproducible.
+          # __pycache__ can exist by now: the test step above ran pytest.
+          zip -r -X "$GITHUB_WORKSPACE/meteoswiss_radar.zip" . \
+            -x '*__pycache__*' -x '*.pyc'
+
+      - name: Verify the zip layout
+        run: |
+          set -euo pipefail
+          unzip -l meteoswiss_radar.zip
+          # manifest.json at the root is what makes this a valid integration
+          # payload; its absence means the wrapper mistake above.
+          # Normalise a possible './' prefix: Info-ZIP may or may not store
+          # it depending on version, and it is harmless. The mistake worth
+          # failing on is a wrapper directory, not a dot-slash.
+          if ! unzip -Z1 meteoswiss_radar.zip | sed 's|^\./||' | grep -qx 'manifest.json'; then
+            echo "::error::manifest.json is not at the root of the zip."
+            exit 1
+          fi
+          if unzip -Z1 meteoswiss_radar.zip | grep -q '__pycache__'; then
+            echo "::error::__pycache__ leaked into the release asset."
+            exit 1
+          fi
+
+      # The zip is the asset HACS downloads (hacs.json: zip_release +
+      # filename). The repo tree stays the fallback for default-branch
+      # installs, which HACS never serves from a release.
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -149,4 +191,5 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.title.outputs.title }}" \
             --notes-file release-notes.md \
-            --verify-tag
+            --verify-tag \
+            meteoswiss_radar.zip

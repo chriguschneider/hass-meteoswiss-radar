@@ -135,6 +135,40 @@ def test_hacs_json_is_valid() -> None:
     assert hacs["homeassistant"] == "2024.7.0"
 
 
+def test_zip_release_asset_is_wired_end_to_end() -> None:
+    """The zip must be requested, named, and actually built (ADR-0008).
+
+    HACS only increments a release's download counter when it fetches a
+    release asset, and it only does that when zip_release is set with a
+    .zip filename. Three files have to agree; if any drifts, installs
+    either stop counting or break outright, and nothing else notices.
+    """
+    hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
+    domain = _manifest()["domain"]
+
+    assert hacs.get("zip_release") is True, (
+        "hacs.json must set zip_release, or HACS walks the repo tree and the "
+        "download counter stays at zero forever (ADR-0008)"
+    )
+    expected = f"{domain}.zip"
+    assert hacs.get("filename") == expected, (
+        f"hacs.json filename must be {expected!r} to match the manifest domain"
+    )
+
+    release_workflow = (
+        ROOT / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+    assert expected in release_workflow, (
+        f"release.yml must build and attach {expected}; hacs.json points HACS "
+        "at an asset that would not exist"
+    )
+    # The zip holds the *contents* of the integration directory. A wrapper
+    # folder lands as custom_components/<domain>/<domain>/ and nothing loads.
+    assert "cd custom_components/meteoswiss_radar" in release_workflow, (
+        "release.yml must zip from inside the integration directory"
+    )
+
+
 def test_readme_reflects_hacs_default_store() -> None:
     """README must reflect HACS default-store membership (issue #85).
 

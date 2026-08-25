@@ -8,6 +8,17 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Changed
+
+- Releases now ship a `meteoswiss_radar.zip` asset and `hacs.json` sets
+  `zip_release` (ADR-0008). HACS only increments a release's download counter
+  when it fetches an *asset*, and for an integration it only does that with
+  `zip_release` set — otherwise it walks the repo tree. That is why every
+  release from `0.7.6` to `v0.13.0` reports **0 downloads** despite real
+  installs, and why the README's downloads badge could never move. HACS also
+  installs faster from one artifact than from a tree walk (#185)
+
+
 ### Fixed
 
 - CI: `release.yml` now reads the annotated tag's message through the GitHub
