@@ -50,6 +50,11 @@ This produces, from the app artwork:
 The output lands in `build/`, which is git-ignored on purpose: the
 trademarked logo's home is the brands PR, not this repo's history.
 
+Verified end-to-end on 2026-08-25: the iTunes lookup resolves
+`ch.admin.meteoswiss`, and the script writes two valid square, opaque
+RGB PNGs at exactly 256×256 and 512×512. The generator is ready; only
+the manual brands PR below remains.
+
 ## Open the brands PR
 
 1. Fork [`home-assistant/brands`](https://github.com/home-assistant/brands).
@@ -65,6 +70,27 @@ trademarked logo's home is the brands PR, not this repo's history.
 3. Follow the brands repo's own checks (`script/lint`, image size/trim
    rules) and open the PR. Be ready for reviewers to ask about logo
    rights.
+
+   Steps 1–3 as a runnable block, once you have decided to proceed with
+   the official logo (run from this repo's checkout, after generating the
+   icons above; requires the `gh` CLI, authenticated):
+
+   ```sh
+   gh repo fork home-assistant/brands --clone --remote --default-branch-only
+   dir=brands/custom_integrations/meteoswiss_radar
+   mkdir -p "$dir"
+   cp build/brands/icon.png build/brands/icon@2x.png "$dir"/
+   git -C brands checkout -b meteoswiss_radar-icon
+   git -C brands add custom_integrations/meteoswiss_radar
+   git -C brands commit -m "Add meteoswiss_radar icon"
+   git -C brands push -u origin meteoswiss_radar-icon
+   gh pr create --repo home-assistant/brands \
+     --title "Add meteoswiss_radar icon" \
+     --body "Icon for the MeteoSwiss Radar custom integration \
+(https://github.com/chriguschneider/hass-meteoswiss-radar). Official \
+MeteoSwiss app icon; used with the maintainer's consent for this \
+non-commercial community integration."
+   ```
 4. After merge, verify:
    - `https://brands.home-assistant.io/meteoswiss_radar/icon.png` returns
      the icon (was 404 as of 2026-08-24),
