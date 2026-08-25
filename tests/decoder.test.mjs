@@ -90,10 +90,15 @@ function loadDecoder() {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  // Pass the absolute cardPath as the vm filename: V8 keys coverage for a vm
+  // script by this name, so an absolute path lets v8-to-istanbul attribute
+  // execution back to the real source file (a bare name reports 0 %). The
+  // appended __decoder epilogue sits on a line past the file's end, so it maps
+  // out of range and is clipped — real-code offsets are unshifted (issue #171).
   vm.runInContext(
     `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef: window };`,
     ctx,
-    { filename: "meteoswiss-radar-card.js" },
+    { filename: cardPath },
   );
   return ctx.__decoder;
 }
@@ -693,7 +698,7 @@ describe("Leaflet retry on transient failure (issue #6)", () => {
     vm.runInContext(
       `${src}\n;globalThis.__card = { MeteoSwissRadarCard, loadLeaflet };`,
       ctx,
-      { filename: "meteoswiss-radar-card.js" },
+      { filename: cardPath },
     );
     return { ctx, appendedScripts, ...ctx.__card };
   }
@@ -1946,7 +1951,7 @@ describe("_buildTimelineLabels across DST boundaries (issue #66)", () => {
     vm.runInContext(
       `${src}\n;globalThis.__card = { MeteoSwissRadarCard };`,
       ctx,
-      { filename: "meteoswiss-radar-card.js" },
+      { filename: cardPath },
     );
     return ctx.__card.MeteoSwissRadarCard;
   }
