@@ -15,6 +15,7 @@ node_modules/
 npm-debug.log*
 coverage/
 coverage.xml
+.coverage
 
 # Scratch output for scripts/generate_brands_icon.py. The shipped icon set
 # lives in custom_components/meteoswiss_radar/brand/ and IS committed --

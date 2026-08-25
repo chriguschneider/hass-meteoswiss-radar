@@ -16,6 +16,15 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   the matching `CHANGELOG.md` section as release notes, and publishes. v0.12.0
   was the last release cut by hand (#170)
 
+### Fixed
+
+- CI: the SonarCloud job now runs `npm run coverage` before the scan. #175
+  taught vitest to attribute the vm-loaded card (0 % → 81 %) and pointed
+  `sonar.javascript.lcov.reportPaths` at `coverage/lcov.info`, but nothing in
+  the workflow ever wrote that file, so the scanner kept seeing the card's
+  ~2200 lines as uncovered and the quality gate stayed red. A guard step now
+  fails loudly if the report is missing, since Sonar only warns (#171)
+
 ## [v0.12.0] — 2026-08-25
 
 ### Added
