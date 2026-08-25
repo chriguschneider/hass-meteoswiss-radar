@@ -1,0 +1,119 @@
+name: Upstream smoke test
+
+# ADR-0006. FORMAT.md is reverse-engineered from an undocumented MeteoSwiss
+# API. If they change the wire format, nothing in this repo breaks -- the
+# decoder just quietly returns nothing, and the first person to find out is
+# a user whose card stopped drawing. This job is the tripwire.
+#
+# Deliberately NOT part of PR checks: upstream drift is not a regression in
+# a pull request, and an upstream outage must not block development.
+
+on:
+  schedule:
+    # Monday 02:00 UTC (ADR-0006). Note GitHub disables cron on repos with
+    # no activity for 60 days -- if this stops running, that is why.
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-test
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Decode live MeteoSwiss frames
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # No secrets and no dependencies: the script uses urllib against the
+      # unauthenticated API, ~4 requests per run.
+      - name: Run the smoke test
+        id: smoke
+        env:
+          # The script prints U+2713 / U+2717 status marks. On any stdout that
+          # is not UTF-8 the print itself raises, the broad except records it
+          # as a failed check, and the run reports upstream drift that did not
+          # happen. Reproduced on a cp1252 console; pinned here so a runner
+          # locale change can never manufacture a false alert.
+          PYTHONIOENCODING: utf-8
+        run: |
+          set +e
+          python tests/tools/smoke_test.py 2>&1 | tee smoke.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or update the drift issue
+        if: steps.smoke.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Upstream API format drift detected"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Keep the issue readable: the tail carries the failure summary the
+          # script prints last.
+          tail -c 4000 smoke.log > log-tail.txt
+
+          {
+            echo "The weekly smoke test could not decode live MeteoSwiss frames."
+            echo
+            echo "- Run: $RUN_URL"
+            echo "- Date: $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo
+            echo "\`\`\`"
+            cat log-tail.txt
+            echo "\`\`\`"
+            echo
+            echo "Per ADR-0006 this is tracked as an external contract change, not a repo regression."
+            echo "Check FORMAT.md against what the API actually returns before touching the decoder."
+          } > body.md
+
+          existing="$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue comment "$existing" --body-file body.md
+          else
+            echo "Opening a new drift issue"
+            # Labelled `bug`/`area-integration` on purpose and NOT with a
+            # P-label: the autopilot grinds the P-backlog, and it cannot fix
+            # MeteoSwiss changing their API. A human triages this one.
+            gh issue create --title "$TITLE" --body-file body.md \
+              --label bug --label area-integration
+          fi
+
+      - name: Note recovery on an open drift issue
+        if: steps.smoke.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Upstream API format drift detected"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          if [ -n "$existing" ]; then
+            # Deliberately not closed: decoding again does not prove the
+            # format is unchanged -- an empty frame decodes fine too. A human
+            # confirms and closes.
+            gh issue comment "$existing" --body \
+              "Smoke test passed again on $(date -u +%Y-%m-%d) ($RUN_URL). Left open for a human to confirm the format actually matches FORMAT.md before closing."
+          fi
+
+      - name: Fail the job if the smoke test failed
+        if: steps.smoke.outputs.exit_code != '0'
+        run: |
+          echo "::error::Smoke test exited ${{ steps.smoke.outputs.exit_code }} -- see the drift issue."
+          exit 1

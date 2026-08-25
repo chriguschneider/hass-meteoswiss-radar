@@ -1,0 +1,55 @@
+name: CodeQL
+
+# ADR-0005. The proxy's URL handling is the declared security boundary
+# (ADR-0001), and the card runs in the browser -- both deserve a static
+# pass that is not a human reading a diff.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Saturday 02:15 UTC, matching the sibling weather-station-card repo.
+    # A weekly run matters because new CodeQL rules ship continuously: the
+    # value is not re-scanning unchanged code, it is scanning it with
+    # queries that did not exist last week.
+    - cron: "15 2 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          config: |
+            paths-ignore:
+              # Vendored Leaflet. Third-party code we do not patch; findings
+              # here would be noise we cannot action. Mirrors sonar.exclusions.
+              - custom_components/meteoswiss_radar/frontend/vendor
+              # Binary frame payloads, not source.
+              - tests/fixtures
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

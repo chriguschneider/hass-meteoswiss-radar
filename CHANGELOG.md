@@ -8,6 +8,29 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- CI: `.github/workflows/codeql.yml` — the static analysis ADR-0005 decided
+  and #134 never wrote. `security-extended` over `javascript-typescript` and
+  `python`, on PRs, on `master`, and weekly (Saturday 02:15 UTC). Vendored
+  Leaflet and the binary test fixtures are excluded, mirroring
+  `sonar.exclusions` (#180)
+- CI: `.github/workflows/smoke-test.yml` — the weekly upstream tripwire
+  ADR-0006 decided and that was likewise never written. Monday 02:00 UTC, it
+  decodes live measurement and forecast frames and, on failure, opens or
+  updates an "Upstream API format drift detected" issue rather than failing
+  PRs. Deliberately labelled `bug`/`area-integration` and **not** with a
+  P-label, so the autopilot does not try to fix MeteoSwiss changing their API
+  (#180)
+
+### Fixed
+
+- `tests/tools/smoke_test.py` reported upstream drift that had not happened
+  when stdout was not UTF-8: the U+2713 status marks fail to encode, the print
+  raises, and the broad `except` records it as a failed check. The workflow
+  pins `PYTHONIOENCODING=utf-8` and the docstring warns anyone running it by
+  hand (#180)
+
 ### Documentation
 
 - `docs/brands-icon.md`: correct two claims that were wrong. The icon does
