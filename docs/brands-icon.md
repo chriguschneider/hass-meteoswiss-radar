@@ -110,10 +110,36 @@ and will still see the puzzle piece. The integration itself supports
 ## Relationship to the HACS default store
 
 Issue #85 (default-store submission) previously listed a brands-repo
-entry as a hard prerequisite. Whether HACS still requires one now that
-integrations can self-host brand images is **unconfirmed** — the proxy
-API announcement does not address HACS publishing. Verify against the
-HACS publisher docs before assuming #84 unblocks #85.
+entry as a hard prerequisite. **Confirmed on 2026-08-25 that it is not**
+— the in-repo `brand/` folder satisfies HACS too, so #84 does unblock
+#85.
+
+HACS runs its own brands validator, and it checks the repository tree
+before it ever looks at the CDN
+([`custom_components/hacs/validate/brands.py`](https://github.com/hacs/integration/blob/main/custom_components/hacs/validate/brands.py)):
+
+```python
+if self.repository.repository_manifest.content_in_root:
+    asset_path = f"brand/{ASSET_FILENAME}"
+else:
+    asset_path = f"{self.repository.content.path.remote}/brand/{ASSET_FILENAME}"
+
+if asset_path in treefiles:
+    return  # local brand assets are enough
+# ... otherwise fall back to home-assistant/brands domains.json
+```
+
+Our `hacs.json` sets `content_in_root: false`, so the path it looks for
+is exactly `custom_components/meteoswiss_radar/brand/icon.png` — which
+this repo ships. The [publisher
+docs](https://www.hacs.xyz/docs/publish/include#check-brands) say the
+same in prose.
+
+One consequence for CI: the same page requires the HACS action to pass
+*“without any errors or ignores”*. `ci.yml` therefore carries **no**
+`ignore: brands` — it used to, back when the plan was a PR against the
+brands repo, and leaving it in would have disqualified the submission
+even though the check now passes on its own merits.
 
 ## Superseded approach
 
