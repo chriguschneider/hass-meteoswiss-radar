@@ -1,0 +1,51 @@
+name: SonarCloud
+
+# ADR-0007 decided this workflow, but it was never created: #134 shipped
+# sonar-project.properties, the ADR and the README badge without it, so
+# nothing ever ran the scanner and the badge read "Quality gate not
+# computed". This is that missing piece.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonarcloud:
+    name: SonarCloud quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SonarCloud needs full history to attribute new code correctly;
+          # a shallow clone makes every line look new.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install pytest pytest-cov
+
+      # Coverage is the reason this runs in CI at all: Automatic Analysis
+      # cannot accept externally produced reports.
+      - name: Pytest with coverage
+        run: pytest -q --cov=custom_components --cov-report=xml
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          # Block the job on a failing gate rather than reporting green
+          # while the badge says otherwise.
+          args: -Dsonar.qualitygate.wait=true
