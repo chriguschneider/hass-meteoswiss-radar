@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
-  <a href="https://hacs.xyz/"><img alt="HACS Custom" src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" /></a>
+  <a href="https://hacs.xyz/"><img alt="HACS Default" src="https://img.shields.io/badge/HACS-Default-41BDF5.svg" /></a>
   <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/chriguschneider/hass-meteoswiss-radar" /></a>
   <a href="https://github.com/chriguschneider/hass-meteoswiss-radar/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/chriguschneider/hass-meteoswiss-radar/ci.yml?branch=master&label=CI" /></a>
   <a href="https://sonarcloud.io/summary/overall?id=chriguschneider_hass-meteoswiss-radar&branch=master"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=chriguschneider_hass-meteoswiss-radar&metric=alert_status" /></a>
@@ -48,14 +48,11 @@ Assistant dashboard.
 
 ## Install
 
-Not in the default HACS store yet, so add it as a custom repository:
+Search HACS for **MeteoSwiss Radar** and click Install, or use the button:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=chriguschneider&repository=hass-meteoswiss-radar&category=integration)
 
-Or by hand: HACS → ⋮ → **Custom repositories** →
-`https://github.com/chriguschneider/hass-meteoswiss-radar`, category
-**Integration**. Then **Download**, restart Home Assistant, and add the
-integration under Settings → Devices & Services.
+Then restart Home Assistant and add the integration under Settings → Devices & Services.
 
 Finally, drop the card on a dashboard:
 
