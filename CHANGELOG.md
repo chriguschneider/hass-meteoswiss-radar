@@ -8,6 +8,16 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: `release.yml` now reads the annotated tag's message through the GitHub
+  API instead of `git tag -l`. `actions/checkout` fetches the real tags and
+  then force-overwrites the triggering one with the resolved commit
+  (`+<sha>:refs/tags/<tag>`), so locally the tag reports as a `commit` and its
+  message is unreachable — v0.13.0 shipped titled bare `v0.13.0` instead of
+  carrying its subject. The lightweight-tag guard is preserved, so a bare tag
+  still cannot title a release with a commit subject (#183)
+
 ## [v0.13.0] — 2026-08-25
 
 ### Added

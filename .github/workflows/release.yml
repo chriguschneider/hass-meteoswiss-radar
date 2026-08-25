@@ -95,19 +95,35 @@ jobs:
       # Releases here are titled "<tag> — <what changed>" (e.g. "v0.11.0 —
       # radar overlay layers"). Nothing in the repo can derive that phrase,
       # so it comes from the annotated tag's own message:
-      #     git tag -a v0.13.0 -m "radar overlay layers"
-      # Only annotated tags are consulted: for a lightweight one,
-      # %(contents:subject) silently falls through to the commit subject,
-      # which would title the release "chore(release): ... (#65)".
+      #     git tag -a v0.13.0 -m "what changed"
+      #
+      # Read via the API, not `git tag -l`, because the checked-out ref is
+      # not the tag we pushed. actions/checkout fetches the real tags and
+      # then force-overwrites the one it wants with the resolved commit:
+      #
+      #   fetch ... +refs/tags/*:refs/tags/*
+      #   fetch --no-tags ... +<commit-sha>:refs/tags/v0.13.0     <-- clobbers
+      #
+      # so `git cat-file -t v0.13.0` reports `commit` locally even for an
+      # annotated tag, and the message is unreachable. v0.13.0 shipped titled
+      # bare because of this.
+      #
+      # Only annotated tags carry a subject: for a lightweight one the API
+      # returns object.type == "commit", and `git tag -l` would have fallen
+      # through to the *commit* subject, titling 0.8.0 "chore(release): 0.8.0,
+      # and cover package.json in the version-sync test (#65)".
       - name: Build the release title
         id: title
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="${{ steps.version.outputs.tag }}"
-          if [ "$(git cat-file -t "$tag")" = "tag" ]; then
-            subject="$(git tag -l --format='%(contents:subject)' "$tag")"
-          else
-            subject=""
+          object_type="$(gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq '.object.type')"
+          subject=""
+          if [ "$object_type" = "tag" ]; then
+            object_sha="$(gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq '.object.sha')"
+            subject="$(gh api "repos/${{ github.repository }}/git/tags/$object_sha" --jq '.message' | head -1)"
           fi
           # Tolerate a message that already repeats the tag, so
           # `-m "v0.13.0 — foo"` yields one "v0.13.0 —", not two.
@@ -121,6 +137,7 @@ jobs:
           else
             title="$tag"
           fi
+          echo "Tag object type: $object_type"
           echo "Release title: $title"
           echo "title=$title" >> "$GITHUB_OUTPUT"
 
