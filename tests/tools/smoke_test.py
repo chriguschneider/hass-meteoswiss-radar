@@ -9,6 +9,11 @@ Run from the repo root:
 
     python3 tests/tools/smoke_test.py
 
+On a console that is not UTF-8 (a Windows cp1252 terminal, for instance)
+the status marks below cannot be encoded, the print raises, and the run
+reports a failure that has nothing to do with upstream. Prefix with
+PYTHONIOENCODING=utf-8 there; the workflow sets it already.
+
 Exits with status 0 if all frames decode successfully and geometry is valid.
 Exits with status 1 if any frame fails to fetch, decode, or validate.
 """
