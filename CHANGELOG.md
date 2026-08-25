@@ -8,6 +8,8 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+## [v0.13.0] — 2026-08-25
+
 ### Added
 
 - CI: `.github/workflows/codeql.yml` — the static analysis ADR-0005 decided
@@ -22,6 +24,11 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   PRs. Deliberately labelled `bug`/`area-integration` and **not** with a
   P-label, so the autopilot does not try to fix MeteoSwiss changing their API
   (#180)
+- CI: `.github/workflows/release.yml`, the tag-triggered release gate ADR-0004
+  specified but that was never written. On a `v*` tag it asserts the tag
+  against `manifest.json`, refuses to overwrite an existing release, extracts
+  the matching `CHANGELOG.md` section as release notes, and publishes. v0.12.0
+  was the last release cut by hand (#170)
 
 ### Fixed
 
@@ -30,6 +37,12 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   raises, and the broad `except` records it as a failed check. The workflow
   pins `PYTHONIOENCODING=utf-8` and the docstring warns anyone running it by
   hand (#180)
+- CI: the SonarCloud job now runs `npm run coverage` before the scan. #175
+  taught vitest to attribute the vm-loaded card (0 % → 81 %) and pointed
+  `sonar.javascript.lcov.reportPaths` at `coverage/lcov.info`, but nothing in
+  the workflow ever wrote that file, so the scanner kept seeing the card's
+  ~2200 lines as uncovered and the quality gate stayed red. A guard step now
+  fails loudly if the report is missing, since Sonar only warns (#171)
 
 ### Documentation
 
@@ -42,23 +55,6 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   refuses new custom components and 15 such PRs were rejected in the five days
   to 2026-08-25. Records the live measurements and the HACS-side fix in
   flight (`hacs/integration#5388`) (#84)
-
-### Added
-
-- CI: `.github/workflows/release.yml`, the tag-triggered release gate ADR-0004
-  specified but that was never written. On a `v*` tag it asserts the tag
-  against `manifest.json`, refuses to overwrite an existing release, extracts
-  the matching `CHANGELOG.md` section as release notes, and publishes. v0.12.0
-  was the last release cut by hand (#170)
-
-### Fixed
-
-- CI: the SonarCloud job now runs `npm run coverage` before the scan. #175
-  taught vitest to attribute the vm-loaded card (0 % → 81 %) and pointed
-  `sonar.javascript.lcov.reportPaths` at `coverage/lcov.info`, but nothing in
-  the workflow ever wrote that file, so the scanner kept seeing the card's
-  ~2200 lines as uncovered and the quality gate stayed red. A guard step now
-  fails loudly if the report is missing, since Sonar only warns (#171)
 
 ## [v0.12.0] — 2026-08-25
 
@@ -212,7 +208,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.13.0...HEAD
+[v0.13.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.12.0...v0.13.0
 [v0.12.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.11.0...v0.12.0
 [v0.11.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.10.0...v0.11.0
 [v0.10.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.9.0...v0.10.0
