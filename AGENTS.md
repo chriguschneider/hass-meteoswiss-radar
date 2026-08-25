@@ -122,6 +122,40 @@ labels via `.github/scripts/pick-model.sh` (`agent:opus/sonnet/haiku`
 override, else `P1`→Opus, `P3`/good-first→Haiku, default Sonnet). The agent
 cannot modify `.github/workflows/`.
 
+### Release procedure
+
+Releases are automated via tag push and a CI workflow (`.github/workflows/release.yml`),
+which implements ADR-0004. The process:
+
+1. **Update version and changelog**: Bump the version in
+   `custom_components/meteoswiss_radar/manifest.json` (and other version-synced
+   files if any). Add a `## [vX.Y.Z]` section at the top of `CHANGELOG.md` with
+   release notes in [Keep a Changelog](https://keepachangelog.com/) format. Both
+   changes land in a commit (e.g., `chore(release): v0.12.0`).
+
+2. **Verify**: Run `pytest -q tests/test_metadata.py tests/test_changelog.py`
+   locally to ensure the version is in sync and the changelog section exists.
+
+3. **Tag**: Create an **annotated** tag with the release title:
+   ```bash
+   git tag -a vX.Y.Z -m "Release title: what changed"
+   ```
+   Only annotated tags are recognized — lightweight tags are skipped. The tag
+   message is parsed to build the GitHub release title as `vX.Y.Z — <message>`.
+
+4. **Push and watch CI**: Push the tag to GitHub:
+   ```bash
+   git push origin vX.Y.Z
+   ```
+   The release workflow runs automatically, verifies the tag matches the version,
+   extracts release notes from `CHANGELOG.md`, and creates the GitHub release.
+   HACS reads the GitHub release to pull in new versions.
+
+**From Claude Code:** The workflow uses `gh release create` at step 4, which was
+historically blocked by permission checks on first attempts. This repo now has
+`.claude/settings.json` with an explicit `gh` allowlist, so release commands run
+without retry or friction.
+
 ### Testing
 
 - **Card decoder**: `npm test` (vitest). The pure decoder functions are
