@@ -28,9 +28,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hacs/action@main
         with:
+          # No `ignore:` here on purpose. HACS default-store inclusion
+          # requires this action to pass "without any errors or ignores",
+          # and the brands check is satisfied by the in-repo
+          # custom_components/meteoswiss_radar/brand/ folder (see
+          # docs/brands-icon.md).
           category: integration
-          # brands is a separate PR to home-assistant/brands, done at release.
-          ignore: brands
 
   python:
     name: Python lint + metadata tests
