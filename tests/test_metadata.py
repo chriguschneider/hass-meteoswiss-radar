@@ -133,3 +133,25 @@ def test_hacs_json_is_valid() -> None:
     # all landed in 2024.7 -- the dev-blog post announcing them is dated
     # 2024-06-18, which is where the earlier "2024.6" claim came from.
     assert hacs["homeassistant"] == "2024.7.0"
+
+
+def test_readme_reflects_hacs_default_store() -> None:
+    """README must reflect HACS default-store membership (issue #85).
+
+    Guards against accidentally reverting to the pre-submission state where
+    the badge said HACS-Custom and the install section asked the user to add
+    a custom repository URL by hand.
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "HACS-Default" in readme, (
+        "README badge must say HACS-Default, not HACS-Custom"
+    )
+    assert "HACS-Custom" not in readme, (
+        "README must not reference the old HACS-Custom badge"
+    )
+    assert "Search HACS" in readme or "search HACS" in readme, (
+        "README install section must tell users to search HACS, not add a custom repo"
+    )
+    assert "custom repository" not in readme.lower(), (
+        "README must not contain instructions to add a custom HACS repository"
+    )
