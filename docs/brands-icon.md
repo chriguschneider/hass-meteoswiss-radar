@@ -84,12 +84,14 @@ the manual brands PR below remains.
    git -C brands add custom_integrations/meteoswiss_radar
    git -C brands commit -m "Add meteoswiss_radar icon"
    git -C brands push -u origin meteoswiss_radar-icon
-   gh pr create --repo home-assistant/brands \
+   # gh pr create infers the head branch from the current directory's
+   # git repo, so it must run inside the fork checkout, not this repo.
+   (cd brands && gh pr create --repo home-assistant/brands \
      --title "Add meteoswiss_radar icon" \
      --body "Icon for the MeteoSwiss Radar custom integration \
 (https://github.com/chriguschneider/hass-meteoswiss-radar). Official \
 MeteoSwiss app icon; used with the maintainer's consent for this \
-non-commercial community integration."
+non-commercial community integration.")
    ```
 4. After merge, verify:
    - `https://brands.home-assistant.io/meteoswiss_radar/icon.png` returns
