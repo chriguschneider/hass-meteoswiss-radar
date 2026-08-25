@@ -48,13 +48,13 @@ the MeteoSwiss app API.
 
 </details>
 
-<!--
-  TODO(#18): drop a real card capture at docs/images/card.png and uncomment
-  the line below. Kept as a comment so the HACS store page never renders a
-  broken image. A live Home Assistant render is required, which cannot be
-  produced from CI. Tracked for the forum/HACS push in #160.
--->
-<!-- ![MeteoSwiss Radar card](docs/images/card.png) -->
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/chriguschneider/hass-meteoswiss-radar/master/docs/images/card.png"
+    alt="The card showing an INCA forecast frame over western Switzerland: precipitation contours from 0 to 60 mm/h, a freezing-rain overlay near Lake Geneva, the intensity and layer legend, the home marker, and the scrubbing timeline with its now indicator"
+    width="440"
+  />
+</p>
 
 ## What this does
 
