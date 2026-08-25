@@ -1276,7 +1276,7 @@ def test_vendor_any_tag_resolves(tag: str) -> None:
     """
     resp = _get_vendor(tag, "leaflet.js")
     assert resp.status == 200
-    assert str(resp.path).endswith("frontend/vendor/leaflet.js")
+    assert resp.path.parts[-3:] == ("frontend", "vendor", "leaflet.js")
 
 
 @pytest.mark.parametrize(
