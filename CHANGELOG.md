@@ -8,6 +8,15 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- Integration: ship the official MeteoSwiss brand icon in
+  `custom_components/meteoswiss_radar/brand/`, replacing the default
+  puzzle-piece in the integrations page and in HACS. Uses the brands proxy
+  API (HA 2026.3+), which prefers an integration's own `brand/` folder over
+  the `home-assistant/brands` CDN, so no PR against that repository is
+  needed. Installs on HA older than 2026.3 keep the puzzle piece (#84)
+
 ## [v0.11.0] — 2026-08-24
 
 ### Changed
