@@ -50,4 +50,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action reads the @claude comment as the task automatically.
-          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 20 --dangerously-skip-permissions"
+          # 60 turns, not 20: a mention that asks for an actual change
+          # (edit, run, push) hits 20 while still gathering context.
+          claude_args: "--model ${{ steps.model.outputs.model }} --max-turns 60 --dangerously-skip-permissions"

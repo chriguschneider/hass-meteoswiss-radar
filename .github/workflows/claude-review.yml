@@ -20,11 +20,14 @@ on:
 
 jobs:
   review:
-    # Only agent branches, and skip the reviewer's own bot pushes.
+    # Only agent branches. `draft == true` alone would never match a
+    # ready_for_review event (the PR is no longer a draft by then), so
+    # an agent marking its own PR ready would skip review entirely.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (startsWith(github.event.pull_request.head.ref, 'claude/') &&
-       github.event.pull_request.draft == true)
+       (github.event.action == 'ready_for_review' ||
+        github.event.pull_request.draft == true))
     runs-on: ubuntu-latest
     permissions:
       contents: write
