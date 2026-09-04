@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MeteoSwiss Radar",
+        "description": "Fügt den MeteoSwiss-Radar-Proxy, die Lovelace-Karte `meteoswiss-radar-card` und lokale Regen-Nowcast-Entitäten für den Home-Assistant-Standort hinzu. Keine Einstellungen erforderlich."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Bereits konfiguriert. Es ist nur eine Instanz erlaubt."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "nowcast_status": {"name": "Regen-Nowcast Status"},
+      "rain_in": {"name": "Regen in"},
+      "rain_start": {"name": "Regenbeginn"},
+      "rain_end": {"name": "Regenende"}
+    },
+    "binary_sensor": {
+      "rain_protection": {"name": "Regenschutz"}
+    }
+  }
+}
