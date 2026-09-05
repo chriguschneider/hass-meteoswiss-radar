@@ -76,7 +76,9 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         except UpdateFailed:
             raise
         except Exception as err:
-            raise UpdateFailed(f"Unable to fetch MeteoSwiss nowcast manifest: {err}") from err
+            raise UpdateFailed(
+                f"Unable to fetch MeteoSwiss nowcast manifest: {err}"
+            ) from err
 
         self.manifest_generated_at = _manifest_generated_at(manifest)
         pictures = _flatten_pictures(manifest)
