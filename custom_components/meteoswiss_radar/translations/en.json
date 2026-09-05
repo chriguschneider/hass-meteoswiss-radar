@@ -3,11 +3,22 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Adds the MeteoSwiss radar proxy and the `meteoswiss-radar-card` Lovelace card. No settings required."
+        "description": "Adds the MeteoSwiss radar proxy, the `meteoswiss-radar-card` Lovelace card, and local rain-nowcast entities for the Home Assistant location. No settings required."
       }
     },
     "abort": {
       "single_instance_allowed": "Already configured. Only a single instance is allowed."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "nowcast_status": {"name": "Rain nowcast status"},
+      "rain_in": {"name": "Rain in"},
+      "rain_start": {"name": "Rain start"},
+      "rain_end": {"name": "Rain end"}
+    },
+    "binary_sensor": {
+      "rain_protection": {"name": "Rain protection"}
     }
   }
 }

@@ -58,8 +58,8 @@ Route the model to the difficulty, not the other way round:
 This repo is two pieces:
 
 - `custom_components/meteoswiss_radar/` — a Python Home Assistant
-  integration: an authenticated proxy to the MeteoSwiss app API plus the
-  card static resource. No entities.
+  integration: an authenticated proxy to the MeteoSwiss app API, local
+  rain-nowcast entities, and the card static resource.
 - `custom_components/meteoswiss_radar/frontend/meteoswiss-radar-card.js`
   — the Lovelace card, a single **vanilla JS classic script**. No
   bundler, no TypeScript, no build step (see
@@ -163,7 +163,7 @@ without retry or friction.
   code without a build step. Golden geometry is snapshotted; regenerate
   with `npm test -- -u` only after verifying against live data.
 - **Card syntax**: `npm run check` (`node --check`).
-- **Integration metadata**: `pytest` (stdlib only, no HA). Full proxy
-  behavior tests against `pytest-homeassistant-custom-component` are
-  tracked as a separate issue.
+- **Integration metadata and nowcast core**: `pytest` (stdlib only, no HA).
+  Full proxy behavior tests against `pytest-homeassistant-custom-component`
+  are tracked as a separate issue.
 - **Lint**: `ruff check custom_components tests`.

@@ -1,10 +1,9 @@
-"""MeteoSwiss Radar: authenticated proxy for the MeteoSwiss app API + Lovelace card.
+"""MeteoSwiss Radar: radar card, authenticated proxy, and local rain nowcast.
 
-The integration has no entities. It provides:
-- an authenticated HTTP proxy (the MeteoSwiss endpoints send no CORS headers,
-  so the card cannot fetch them directly from the browser),
-- the card bundle as a static frontend resource, auto-registered on every
-  dashboard via add_extra_js_url (works for storage and YAML mode alike).
+The integration provides:
+- an authenticated HTTP proxy for the MeteoSwiss app API,
+- the radar card bundle as a static frontend resource,
+- local RZC/INCA rain-nowcast entities for the Home Assistant location.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import gzip
+import json
 import logging
 import re
 import time
@@ -27,6 +27,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CARD_FILENAME,
+    DATA_NOWCAST,
     DOMAIN,
     FRONTEND_URL_BASE,
     PROXY_URL,
@@ -98,6 +99,8 @@ def _accepts_gzip(accept_encoding: str) -> bool:
     if wildcard_q is not None:
         return wildcard_q > 0.0
     return False
+
+
 # Byte-bounded LRU that accounts gzipped bytes only: the 20 MB budget now holds
 # ~7× more entries than the previous raw+gz double-counting, keeping a full
 # manifest (~291 frames) and any active overlay layers resident without thrash
@@ -155,6 +158,44 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
 
         status, body = await asyncio.shield(task)
         return self._build_response(tail, status, body, request)
+
+    async def async_get_json(self, tail: str) -> dict:
+        """Return one allowlisted upstream JSON object through the shared cache.
+
+        Backend nowcast entities use the same cache and in-flight request
+        deduplication as the authenticated HTTP proxy used by the card.
+        """
+        if not any(rx.fullmatch(tail) for rx in _ALLOWED_PATHS):
+            raise ValueError(f"MeteoSwiss Radar path is not allowlisted: {tail}")
+
+        if tail in self._inflight:
+            status, body = await asyncio.shield(self._inflight[tail])
+        else:
+            cached = self._cache_get(tail)
+            if cached is not None:
+                status, body = 200, cached
+            else:
+                loop = asyncio.get_running_loop()
+                task: asyncio.Task = loop.create_task(self._fetch_and_cache(tail))
+                self._inflight[tail] = task
+                task.add_done_callback(
+                    lambda _task: self._inflight.pop(tail, None)
+                )
+                status, body = await asyncio.shield(task)
+
+        if status != 200 or body is None:
+            raise RuntimeError(
+                f"MeteoSwiss Radar upstream returned HTTP {status} for {tail}"
+            )
+
+        raw = body if tail.endswith(_VERSIONS_JSON) else gzip.decompress(body)
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            raise RuntimeError(f"Invalid MeteoSwiss Radar JSON for {tail}") from err
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"Unexpected MeteoSwiss Radar JSON type for {tail}")
+        return parsed
 
     # ------------------------------------------------------------------
     # Cache
@@ -422,41 +463,129 @@ class MeteoSwissRadarVendorView(HomeAssistantView):
 
 # Routes (the two HTTP views and the static vendor mounts) can only be
 # registered once per HA run: HA has no API to unregister a view or a static
-# path, so a config-entry reload must not re-register them. This flag is
-# deliberately NOT cleared on unload -- unlike the card resource below, the
-# routes genuinely survive an unload (verified against HA 2024.7 core).
+# path, so a config-entry reload must not re-register them.
 _ROUTES_KEY = f"{DOMAIN}_routes_registered"
+_PROXY_KEY = f"{DOMAIN}_proxy_view"
+_ENTRY_SETUP_KEY = f"{DOMAIN}_entries_setup"
+_NOWCAST_PLATFORMS = ("sensor", "binary_sensor")
+
+
+def _home_location(hass: HomeAssistant) -> tuple[float, float] | None:
+    """Return a valid numeric Home Assistant location, if available."""
+    latitude = getattr(hass.config, "latitude", None)
+    longitude = getattr(hass.config, "longitude", None)
+    if (
+        isinstance(latitude, bool)
+        or isinstance(longitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not isinstance(longitude, (int, float))
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+    return float(latitude), float(longitude)
+
+
+async def _async_setup_nowcast(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    proxy: MeteoSwissRadarProxyView,
+    *,
+    latitude: float,
+    longitude: float,
+) -> None:
+    """Create the location nowcast coordinator and forward entity platforms."""
+    from .nowcast import MeteoSwissRadarNowcastCoordinator
+
+    coordinator = MeteoSwissRadarNowcastCoordinator(
+        hass,
+        proxy,
+        latitude=latitude,
+        longitude=longitude,
+    )
+    domain_data = hass.data.setdefault(DATA_NOWCAST, {})
+    domain_data[entry.entry_id] = {"nowcast_coordinator": coordinator}
+
+    try:
+        await hass.config_entries.async_forward_entry_setups(
+            entry,
+            _NOWCAST_PLATFORMS,
+        )
+    except Exception:
+        domain_data.pop(entry.entry_id, None)
+        if not domain_data:
+            hass.data.pop(DATA_NOWCAST, None)
+        raise
+
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_refresh(),
+        "MeteoSwiss Radar initial local nowcast refresh",
+    )
+
+
+async def _async_unload_nowcast(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> bool:
+    """Unload local nowcast entity platforms."""
+    domain_data = hass.data.get(DATA_NOWCAST)
+    if not isinstance(domain_data, dict) or entry.entry_id not in domain_data:
+        return True
+
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        entry,
+        _NOWCAST_PLATFORMS,
+    )
+    if unload_ok:
+        domain_data.pop(entry.entry_id, None)
+        if not domain_data:
+            hass.data.pop(DATA_NOWCAST, None)
+    return unload_ok
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Register proxy view and static paths once; (re-)register the card resource.
+    """Set up proxy/card once and local nowcast entities per config entry."""
+    proxy = hass.data.get(_PROXY_KEY)
 
-    The card's extra-JS URL is removed on unload, so it must be re-added on
-    every setup -- otherwise a reload (UI "Reload", disable/enable, or
-    homeassistant.reload_config_entry) leaves every dashboard without the card
-    until a full HA restart (issue #67).
-    """
-    if hass.data.get(_ROUTES_KEY):
-        _register_card_resource(hass)
+    if not hass.data.get(_ROUTES_KEY):
+        proxy = MeteoSwissRadarProxyView(hass)
+        hass.http.register_view(proxy)
+        hass.http.register_view(MeteoSwissRadarCardView())
+        hass.http.register_view(MeteoSwissRadarVendorView())
+        hass.data[_PROXY_KEY] = proxy
+        hass.data[_ROUTES_KEY] = True
+    elif proxy is None:
+        # A backend-only instance is safe if code was hot-swapped after routes
+        # were already registered. After the required HA restart the card and
+        # entities share the same proxy instance again.
+        proxy = MeteoSwissRadarProxyView(hass)
+        hass.data[_PROXY_KEY] = proxy
+
+    _register_card_resource(hass)
+
+    entries = hass.data.setdefault(_ENTRY_SETUP_KEY, set())
+    if entry.entry_id in entries:
         return True
 
-    hass.http.register_view(MeteoSwissRadarProxyView(hass))
-    hass.http.register_view(MeteoSwissRadarCardView())
-    # A view (not a static mount): the {tag} in the vendor URL must map to the
-    # same on-disk files regardless of which version stamped it, so old and new
-    # cards both resolve across an upgrade or a restart-free JS update (#70).
-    hass.http.register_view(MeteoSwissRadarVendorView())
-    hass.data[_ROUTES_KEY] = True
-    _register_card_resource(hass)
+    location = _home_location(hass)
+    if location is not None:
+        await _async_setup_nowcast(
+            hass,
+            entry,
+            proxy,
+            latitude=location[0],
+            longitude=location[1],
+        )
+    else:
+        _LOGGER.debug("Home location unavailable; local nowcast entities skipped")
+
+    entries.add(entry.entry_id)
     return True
 
 
 def _register_card_resource(hass: HomeAssistant) -> None:
-    """Add the card's extra-JS URL to every dashboard, once per active entry.
-
-    Guarded by DOMAIN (popped on unload) so a second setup without an
-    intervening unload does not register a duplicate URL.
-    """
+    """Add the card's extra-JS URL to every dashboard once per active entry."""
     if hass.data.get(DOMAIN):
         return
     add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
@@ -464,12 +593,15 @@ def _register_card_resource(hass: HomeAssistant) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Remove the card resource so a later setup re-adds it; routes stay put.
+    """Unload entities and card resource; non-unregisterable routes stay put."""
+    entries = hass.data.get(_ENTRY_SETUP_KEY, set())
+    if entry.entry_id in entries:
+        if not await _async_unload_nowcast(hass, entry):
+            return False
+        entries.discard(entry.entry_id)
+        if not entries:
+            hass.data.pop(_ENTRY_SETUP_KEY, None)
 
-    The routes (views + static paths) cannot be unregistered in HA and remain
-    until restart, so _ROUTES_KEY is intentionally left set. Popping DOMAIN
-    lets the next async_setup_entry re-register the card resource (issue #67).
-    """
     remove_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
     hass.data.pop(DOMAIN, None)
     return True
