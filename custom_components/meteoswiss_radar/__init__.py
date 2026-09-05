@@ -27,6 +27,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CARD_FILENAME,
+    DATA_NOWCAST,
     DOMAIN,
     FRONTEND_URL_BASE,
     PROXY_URL,
@@ -98,6 +99,8 @@ def _accepts_gzip(accept_encoding: str) -> bool:
     if wildcard_q is not None:
         return wildcard_q > 0.0
     return False
+
+
 # Byte-bounded LRU that accounts gzipped bytes only: the 20 MB budget now holds
 # ~7× more entries than the previous raw+gz double-counting, keeping a full
 # manifest (~291 frames) and any active overlay layers resident without thrash
@@ -193,7 +196,6 @@ class MeteoSwissRadarProxyView(HomeAssistantView):
         if not isinstance(parsed, dict):
             raise RuntimeError(f"Unexpected MeteoSwiss Radar JSON type for {tail}")
         return parsed
-
 
     # ------------------------------------------------------------------
     # Cache
@@ -464,36 +466,55 @@ class MeteoSwissRadarVendorView(HomeAssistantView):
 # path, so a config-entry reload must not re-register them.
 _ROUTES_KEY = f"{DOMAIN}_routes_registered"
 _PROXY_KEY = f"{DOMAIN}_proxy_view"
-_RESOURCE_KEY = f"{DOMAIN}_resource_registered"
 _ENTRY_SETUP_KEY = f"{DOMAIN}_entries_setup"
+_NOWCAST_PLATFORMS = ("sensor", "binary_sensor")
+
+
+def _home_location(hass: HomeAssistant) -> tuple[float, float] | None:
+    """Return a valid numeric Home Assistant location, if available."""
+    latitude = getattr(hass.config, "latitude", None)
+    longitude = getattr(hass.config, "longitude", None)
+    if (
+        isinstance(latitude, bool)
+        or isinstance(longitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not isinstance(longitude, (int, float))
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+    return float(latitude), float(longitude)
 
 
 async def _async_setup_nowcast(
     hass: HomeAssistant,
     entry: ConfigEntry,
     proxy: MeteoSwissRadarProxyView,
+    *,
+    latitude: float,
+    longitude: float,
 ) -> None:
     """Create the location nowcast coordinator and forward entity platforms."""
-    from homeassistant.const import Platform
-
     from .nowcast import MeteoSwissRadarNowcastCoordinator
 
     coordinator = MeteoSwissRadarNowcastCoordinator(
         hass,
         proxy,
-        latitude=hass.config.latitude,
-        longitude=hass.config.longitude,
+        latitude=latitude,
+        longitude=longitude,
     )
-    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DATA_NOWCAST, {})
     domain_data[entry.entry_id] = {"nowcast_coordinator": coordinator}
 
     try:
         await hass.config_entries.async_forward_entry_setups(
             entry,
-            [Platform.SENSOR, Platform.BINARY_SENSOR],
+            _NOWCAST_PLATFORMS,
         )
     except Exception:
         domain_data.pop(entry.entry_id, None)
+        if not domain_data:
+            hass.data.pop(DATA_NOWCAST, None)
         raise
 
     entry.async_create_background_task(
@@ -508,20 +529,18 @@ async def _async_unload_nowcast(
     entry: ConfigEntry,
 ) -> bool:
     """Unload local nowcast entity platforms."""
-    from homeassistant.const import Platform
-
-    domain_data = hass.data.get(DOMAIN)
+    domain_data = hass.data.get(DATA_NOWCAST)
     if not isinstance(domain_data, dict) or entry.entry_id not in domain_data:
         return True
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         entry,
-        [Platform.SENSOR, Platform.BINARY_SENSOR],
+        _NOWCAST_PLATFORMS,
     )
     if unload_ok:
         domain_data.pop(entry.entry_id, None)
         if not domain_data:
-            hass.data.pop(DOMAIN, None)
+            hass.data.pop(DATA_NOWCAST, None)
     return unload_ok
 
 
@@ -538,7 +557,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[_ROUTES_KEY] = True
     elif proxy is None:
         # A backend-only instance is safe if code was hot-swapped after routes
-        # were already registered.  After the required HA restart the card and
+        # were already registered. After the required HA restart the card and
         # entities share the same proxy instance again.
         proxy = MeteoSwissRadarProxyView(hass)
         hass.data[_PROXY_KEY] = proxy
@@ -549,17 +568,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.entry_id in entries:
         return True
 
-    await _async_setup_nowcast(hass, entry, proxy)
+    location = _home_location(hass)
+    if location is not None:
+        await _async_setup_nowcast(
+            hass,
+            entry,
+            proxy,
+            latitude=location[0],
+            longitude=location[1],
+        )
+    else:
+        _LOGGER.debug("Home location unavailable; local nowcast entities skipped")
+
     entries.add(entry.entry_id)
     return True
 
 
 def _register_card_resource(hass: HomeAssistant) -> None:
     """Add the card's extra-JS URL to every dashboard once per active entry."""
-    if hass.data.get(_RESOURCE_KEY):
+    if hass.data.get(DOMAIN):
         return
     add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
-    hass.data[_RESOURCE_KEY] = True
+    hass.data[DOMAIN] = True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -573,5 +603,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data.pop(_ENTRY_SETUP_KEY, None)
 
     remove_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
-    hass.data.pop(_RESOURCE_KEY, None)
+    hass.data.pop(DOMAIN, None)
     return True
