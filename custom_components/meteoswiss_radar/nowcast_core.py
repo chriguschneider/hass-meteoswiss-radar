@@ -7,11 +7,12 @@ location and the small rain-event state machine used by the HA entities.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from math import ceil
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 
 DEFAULT_WARNING_LEAD_MINUTES = 30
@@ -247,7 +248,7 @@ def _has_complete_dry_window(
         return False
 
     max_gap = timedelta(minutes=MAX_FORECAST_GAP_MINUTES)
-    for previous, current in zip(window, window[1:]):
+    for previous, current in zip(window, window[1:], strict=False):
         if current.timestamp - previous.timestamp > max_gap:
             return False
 
@@ -293,7 +294,9 @@ def _unknown_in_lead_window(
     max_gap = timedelta(minutes=MAX_FORECAST_GAP_MINUTES)
     return any(
         current.timestamp - previous.timestamp > max_gap
-        for previous, current in zip(window[:required], window[1:required])
+        for previous, current in zip(
+            window[:required], window[1:required], strict=False
+        )
     )
 
 
@@ -327,8 +330,12 @@ def evaluate_nowcast(
     dry_now_confirmed = False
     if current_wet is False:
         current_sample = RainSample(timestamp=now, wet=False, source="measurement")
+        dry_samples = [
+            current_sample,
+            *(sample for sample in forecast if sample.timestamp > now),
+        ]
         dry_now_confirmed = _has_complete_dry_window(
-            [current_sample, *(sample for sample in forecast if sample.timestamp > now)],
+            dry_samples,
             0,
             dry_window_minutes,
             forecast_step_minutes,
@@ -341,7 +348,11 @@ def evaluate_nowcast(
     active = current_wet is True or (previous_started and not dry_now_confirmed)
 
     if active:
-        if previous_started and previous is not None and previous.event_start is not None:
+        if (
+            previous_started
+            and previous is not None
+            and previous.event_start is not None
+        ):
             event_start = previous.event_start
         elif measurement is not None:
             event_start = measurement.timestamp
