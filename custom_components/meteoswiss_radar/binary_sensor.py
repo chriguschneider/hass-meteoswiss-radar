@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DATA_NOWCAST, DOMAIN
 from .nowcast import MeteoSwissRadarNowcastCoordinator
 
 
@@ -19,7 +19,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the local rain protection entity."""
 
-    coordinator: MeteoSwissRadarNowcastCoordinator = hass.data[DOMAIN][
+    coordinator: MeteoSwissRadarNowcastCoordinator = hass.data[DATA_NOWCAST][
         entry.entry_id
     ]["nowcast_coordinator"]
     async_add_entities([MeteoSwissRadarRainProtectionBinarySensor(coordinator, entry)])
