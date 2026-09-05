@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DATA_NOWCAST, DOMAIN
 from .nowcast import MeteoSwissRadarNowcastCoordinator
 
 
@@ -68,7 +68,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up MeteoSwiss Radar nowcast sensors."""
 
-    coordinator: MeteoSwissRadarNowcastCoordinator = hass.data[DOMAIN][
+    coordinator: MeteoSwissRadarNowcastCoordinator = hass.data[DATA_NOWCAST][
         entry.entry_id
     ]["nowcast_coordinator"]
     async_add_entities(
@@ -123,7 +123,9 @@ class MeteoSwissRadarNowcastSensor(
             self._attr_extra_state_attributes = {
                 "currently_wet": data.currently_wet,
                 "protection_active": data.protection_active,
-                "event_start": data.event_start.isoformat() if data.event_start else None,
+                "event_start": (
+                    data.event_start.isoformat() if data.event_start else None
+                ),
                 "event_end": data.event_end.isoformat() if data.event_end else None,
                 "event_end_open": data.event_end_open,
                 "forecast_horizon_end": (
