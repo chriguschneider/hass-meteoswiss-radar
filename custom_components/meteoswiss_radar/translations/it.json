@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MeteoSwiss Radar",
+        "description": "Aggiunge il proxy radar MeteoSwiss e la scheda Lovelace `meteoswiss-radar-card`. Nessuna impostazione necessaria.\n\nPoi ricarica la scheda del browser (nell'app Companion: reimposta la cache del frontend) — altrimenti le dashboard mostrano \"Custom element doesn't exist: meteoswiss-radar-card\"."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Già configurato. È consentita una sola istanza."
+    }
+  }
+}

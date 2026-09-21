@@ -66,6 +66,19 @@ is optional and lives in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 Needs Home Assistant **2024.7.0 or newer**. Uninstalling needs a restart,
 because the integration serves the card as a frontend resource.
 
+### "Custom element doesn't exist: meteoswiss-radar-card"
+
+The card ships inside the integration, so HACS alone doesn't make it appear.
+Check, in order:
+
+1. **Restarted** Home Assistant after the HACS download.
+2. **Added the integration** under Settings → Devices & Services → Add
+   integration → *MeteoSwiss Radar*. Downloading it in HACS is not enough; the
+   card is only registered once the integration is set up.
+3. **Reloaded the browser tab.** Home Assistant adds the card to the page when
+   the page loads, so a tab that was open while you added the integration
+   doesn't have it yet. In the Companion app, reset the frontend cache.
+
 ## Overlay layers
 
 Four optional layers, switched on per card in the editor or in YAML:
