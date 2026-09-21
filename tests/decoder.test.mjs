@@ -96,14 +96,14 @@ function loadDecoder() {
   // appended __decoder epilogue sits on a line past the file's end, so it maps
   // out of range and is clipped — real-code offsets are unshifted (issue #171).
   vm.runInContext(
-    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef: window };`,
+    `${src}\n;globalThis.__decoder = { gridKmToLatLng, decodeContourInto, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, STRINGS, tr, weekdayShort, windowRef: window };`,
     ctx,
     { filename: cardPath },
   );
   return ctx.__decoder;
 }
 
-const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, windowRef } =
+const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, STRINGS, tr, weekdayShort, windowRef } =
   loadDecoder();
 
 function resetSharedCache() {
@@ -3792,5 +3792,65 @@ describe("Path2D cache eviction and view-key clear (issue #82)", () => {
     // Cache should still have entries.
     expect(layer._pathCache.size).toBe(1);
     expect(layer._pathCache.has("frame-1")).toBe(true);
+  });
+});
+
+describe("card localisation (forum feedback)", () => {
+  // 2026-08-24 is a Monday.
+  const MONDAY = Date.UTC(2026, 7, 24, 12) / 1000;
+
+  it("tr picks the base language and falls back to English", () => {
+    expect(tr("de", "forecast")).toBe("Prognose");
+    expect(tr("de-CH", "forecast")).toBe("Prognose");
+    expect(tr("fr", "measurement")).toBe("Mesure");
+    expect(tr("it", "lightning")).toBe("Fulmini");
+    expect(tr("nl", "forecast")).toBe("Forecast");
+    expect(tr(undefined, "forecast")).toBe("Forecast");
+  });
+
+  it("every language defines exactly the English keys", () => {
+    const keys = Object.keys(STRINGS.en).sort();
+    for (const lang of ["de", "fr", "it"]) {
+      expect(Object.keys(STRINGS[lang]).sort()).toEqual(keys);
+    }
+  });
+
+  it("weekdayShort follows the language and survives an invalid tag", () => {
+    expect(weekdayShort(MONDAY, "en")).toBe("Mon");
+    expect(weekdayShort(MONDAY, "de")).toMatch(/^Mo/);
+    expect(weekdayShort(MONDAY, "fr")).toMatch(/^lun/);
+    expect(weekdayShort(MONDAY, "not a tag!!")).toBe("Mon");
+  });
+
+  function makeCard(language) {
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({ large_label: true });
+    card._hass = { locale: { language }, language: "en" };
+    const el = () => ({ textContent: "", hidden: false, setAttribute() {} });
+    card._label = { hidden: false, dataset: {}, classList: { toggle() {} } };
+    card._labelL1 = el();
+    card._labelL2 = el();
+    card._frames = [{ ts: MONDAY, type: "forecast", day: "24.08.2026", timepoint: "14:00" }];
+    card._frameIndex = 0;
+    return card;
+  }
+
+  it("uses the profile language (hass.locale) over the server language", () => {
+    const card = makeCard("de");
+    card._updateLabel();
+    expect(card._labelL2.textContent).toBe("Prognose");
+    expect(card._labelL1.textContent).toMatch(/^Mo.* 24\. · 14:00$/);
+  });
+
+  it("relabels an initialised card when the language changes", () => {
+    const card = makeCard("en");
+    card._initialized = true;
+    card._maybeInit = () => {};
+    card._frames[0].shortLabel = card._frameLabel(card._frames[0]);
+    card._updateLabel();
+    expect(card._labelL2.textContent).toBe("Forecast");
+    card.hass = { locale: { language: "it" }, language: "en" };
+    expect(card._labelL2.textContent).toBe("Previsione");
+    expect(card._labelL1.textContent).toMatch(/^lun/);
   });
 });

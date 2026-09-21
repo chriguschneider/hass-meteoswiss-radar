@@ -8,6 +8,21 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- The card speaks German, French and Italian: the timeline's weekday labels
+  follow the HA profile language (any language, via `Intl`), and the map
+  label, legend overlays, mode hint and error banners are translated for the
+  four MeteoSwiss languages, falling back to English. Switching the profile
+  language relabels an open card in place. The card editor stays English
+- Config-flow translations for German, French and Italian
+
+### Changed
+
+- The config-flow dialog and the README now tell you to reload the browser
+  tab after adding the integration: the card is injected at page load, so a
+  tab left open reports "Custom element doesn't exist: meteoswiss-radar-card"
+
 ## [v0.14.0] — 2026-08-25
 
 ### Changed
