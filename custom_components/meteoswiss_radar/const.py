@@ -4,7 +4,7 @@ DOMAIN = "meteoswiss_radar"
 DATA_NOWCAST = f"{DOMAIN}_nowcast_data"
 
 # Keep in sync with manifest.json and the card's CARD_VERSION.
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 
 UPSTREAM_BASE = "https://www.meteoschweiz.admin.ch"
 

@@ -4,7 +4,7 @@
  * authenticated proxy. Frame format: see FORMAT.md in the repository root.
  */
 
-const CARD_VERSION = "0.14.0";
+const CARD_VERSION = "0.15.0";
 const FRONTEND_BASE = "/meteoswiss_radar/frontend";
 const PROXY_BASE = "meteoswiss_radar/proxy"; // hass.callApi() prepends /api/
 
@@ -77,7 +77,6 @@ const OVERLAYS = [
 
 // Legacy: keep these derived for any code that may reference them directly.
 const OVERLAY_COLORS = Object.fromEntries(OVERLAYS.map(o => [o.key, o.color]));
-const OVERLAY_LABELS = Object.fromEntries(OVERLAYS.map(o => [o.key, o.label]));
 const OVERLAY_URL_KEY = Object.fromEntries(
   OVERLAYS.filter(o => o.urlKey).map(o => [o.key, o.urlKey])
 );
@@ -311,11 +310,86 @@ function frameBytes(areas) {
   return b;
 }
 
-// One formatter instance reused across all calls avoids re-parsing the locale
-// option bag and allocating a new Intl.DateTimeFormat on every frame tick.
-const _weekdayFmt = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
-function weekdayShort(ts) {
-  return _weekdayFmt.format(new Date(ts * 1000));
+// Card UI strings in the four languages MeteoSwiss publishes; any other HA
+// language falls back to English. Weekday names come from Intl instead, so
+// they follow every HA language, not just these four.
+const STRINGS = {
+  en: {
+    measurement: "Measurement",
+    forecast: "Forecast",
+    measurement_only: "measurement only",
+    play_pause: "Play/Pause",
+    data_unavailable: "Radar data is currently unavailable",
+    frames_retrying: "Radar frames unavailable — retrying",
+    snow: "Snow",
+    snowrain: "Sleet",
+    freezingrain: "Freezing rain",
+    lightning: "Lightning",
+  },
+  de: {
+    measurement: "Messung",
+    forecast: "Prognose",
+    measurement_only: "nur Messung",
+    play_pause: "Abspielen/Pause",
+    data_unavailable: "Radardaten sind derzeit nicht verfügbar",
+    frames_retrying: "Radarbilder nicht verfügbar — neuer Versuch",
+    snow: "Schnee",
+    snowrain: "Schneeregen",
+    freezingrain: "Gefrierender Regen",
+    lightning: "Blitze",
+  },
+  fr: {
+    measurement: "Mesure",
+    forecast: "Prévision",
+    measurement_only: "mesures uniquement",
+    play_pause: "Lecture/Pause",
+    data_unavailable: "Données radar actuellement indisponibles",
+    frames_retrying: "Images radar indisponibles — nouvel essai",
+    snow: "Neige",
+    snowrain: "Pluie et neige mêlées",
+    freezingrain: "Pluie verglaçante",
+    lightning: "Éclairs",
+  },
+  it: {
+    measurement: "Misurazione",
+    forecast: "Previsione",
+    measurement_only: "solo misurazioni",
+    play_pause: "Riproduci/Pausa",
+    data_unavailable: "Dati radar attualmente non disponibili",
+    frames_retrying: "Immagini radar non disponibili — nuovo tentativo",
+    snow: "Neve",
+    snowrain: "Pioggia mista a neve",
+    freezingrain: "Pioggia gelata",
+    lightning: "Fulmini",
+  },
+};
+
+// The user's profile language wins over the server language; HA exposes it
+// as hass.locale.language (older cores: hass.language only).
+function resolveLang(hass) {
+  return String(hass?.locale?.language || hass?.language || "en");
+}
+
+function tr(lang, key) {
+  const base = String(lang || "en").split("-")[0].toLowerCase();
+  return (STRINGS[base] || STRINGS.en)[key] ?? STRINGS.en[key] ?? key;
+}
+
+// One formatter per language, reused across calls: avoids re-parsing the
+// locale option bag and allocating a new Intl.DateTimeFormat every frame tick.
+const _weekdayFmts = new Map();
+function weekdayShort(ts, lang = "en") {
+  let fmt = _weekdayFmts.get(lang);
+  if (!fmt) {
+    try {
+      fmt = new Intl.DateTimeFormat(lang, { weekday: "short" });
+    } catch {
+      // HA language tags Intl rejects must not break the timeline.
+      fmt = new Intl.DateTimeFormat("en", { weekday: "short" });
+    }
+    _weekdayFmts.set(lang, fmt);
+  }
+  return fmt.format(new Date(ts * 1000));
 }
 
 /* Canvas layer that caches projected Path2D sets per frame and view.
@@ -681,8 +755,30 @@ class MeteoSwissRadarCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const prevLang = this._hass ? resolveLang(this._hass) : null;
     this._hass = hass;
+    if (this._initialized && prevLang !== resolveLang(hass)) this._applyLanguage();
     this._maybeInit();
+  }
+
+  get _lang() {
+    return resolveLang(this._hass);
+  }
+
+  // A profile language switch reaches an open card as a new hass object;
+  // relabel in place rather than rebuilding the map.
+  _applyLanguage() {
+    const lang = this._lang;
+    for (const f of this._frames) f.shortLabel = this._frameLabel(f, lang);
+    if (this._modeHint) this._modeHint.textContent = tr(lang, "measurement_only");
+    if (this._playBtn) this._playBtn.setAttribute("aria-label", tr(lang, "play_pause"));
+    this._buildTimelineLabels();
+    this._updateOverlayLegend();
+    this._updateLabel();
+  }
+
+  _frameLabel(f, lang = this._lang) {
+    return `${weekdayShort(f.ts, lang)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
   }
 
   connectedCallback() {
@@ -844,7 +940,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     } catch (err) {
       if (this._epoch !== epoch) return;
       console.warn("meteoswiss-radar-card: initial data load failed:", err);
-      this._showBanner("Radar data is currently unavailable");
+      this._showBanner(tr(this._lang, "data_unavailable"));
     }
     if (this._epoch !== epoch) return;
     this._startRefreshTimer();
@@ -861,6 +957,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     // twice throws, so reuse it and let innerHTML replace the previous tree.
     const root = this.shadowRoot || this.attachShadow({ mode: "open" });
     const c = this._config;
+    const lang = this._lang;
     const height = Number(c.height) || 400;
     root.innerHTML = `
       <link rel="stylesheet" href="${FRONTEND_BASE}/vendor/${CARD_VERSION}/leaflet.css">
@@ -1006,12 +1103,12 @@ class MeteoSwissRadarCard extends HTMLElement {
           <div id="map"></div>
           <div id="label" hidden><div id="label-l1" class="l1"></div><div id="label-l2" class="l2" hidden></div></div>
           <div id="banner" hidden></div>
-          <button id="play" aria-label="Play/Pause" hidden>${PLAY_SVG}</button>
+          <button id="play" aria-label="${tr(lang, "play_pause")}" hidden>${PLAY_SVG}</button>
           <div id="legend" hidden>
             <div class="title">mm/h</div>
             <div id="cells"></div>
             <div id="overlay-swatches" hidden></div>
-            <span id="modehint" hidden>measurement only</span>
+            <span id="modehint" hidden>${tr(lang, "measurement_only")}</span>
           </div>
           <div id="attrib" ${c.attribution === false ? "hidden" : ""}>${ATTRIBUTION}</div>
         </div>
@@ -1239,9 +1336,8 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (!frames.length) throw new Error("no frames in animation.json");
 
     frames = this._applyTimeSpan(frames);
-    for (const f of frames) {
-      f.shortLabel = `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
-    }
+    const lang = this._lang;
+    for (const f of frames) f.shortLabel = this._frameLabel(f, lang);
 
     const prevTs = this._frames[this._frameIndex]
       ? this._frames[this._frameIndex].ts
@@ -1352,7 +1448,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       const chip = document.createElement("i");
       chip.style.background = OVERLAY_COLORS[key];
       const label = document.createElement("b");
-      label.textContent = OVERLAY_LABELS[key];
+      label.textContent = tr(this._lang, key);
       cell.appendChild(chip);
       cell.appendChild(label);
       this._overlaySwatch.appendChild(cell);
@@ -1365,7 +1461,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       chip.style.background = desc ? desc.color : "#FFFF00";
       chip.style.borderRadius = "50%";
       const label = document.createElement("b");
-      label.textContent = desc ? desc.label : "Lightning";
+      label.textContent = tr(this._lang, "lightning");
       cell.appendChild(chip);
       cell.appendChild(label);
       this._overlaySwatch.appendChild(cell);
@@ -1387,6 +1483,7 @@ class MeteoSwissRadarCard extends HTMLElement {
   _buildTimelineLabels() {
     if (!this._config.time_axis || this._frames.length < 2) return;
     const frames = this._frames;
+    const lang = this._lang;
     const t0 = frames[0].ts;
     const t1 = frames.at(-1).ts;
     const span = t1 - t0;
@@ -1442,10 +1539,11 @@ class MeteoSwissRadarCard extends HTMLElement {
         const b = document.createElement("b");
         const pixelOffset = Math.round(percentX / 100 * rowWidth);
         b.style.left = first ? "0" : (pixelOffset + 5) + "px";
+        const wd = weekdayShort(visStart, lang);
         b.textContent =
           width < 8
-            ? weekdayShort(visStart)
-            : weekdayShort(visStart) +
+            ? wd
+            : wd +
               " " +
               String(d.getDate()).padStart(2, "0") +
               ".";
@@ -1508,7 +1606,7 @@ class MeteoSwissRadarCard extends HTMLElement {
         // playing from cache even when the manifest refresh fails.
         // Re-show the banner if the retry _loadData also fails mid-fetch
         // (e.g. frame 502 after manifest succeeded) so the user sees it.
-        if (!this._dataReady) this._showBanner("Radar data is currently unavailable");
+        if (!this._dataReady) this._showBanner(tr(this._lang, "data_unavailable"));
       }
     }, REFRESH_INTERVAL_MS);
   }
@@ -1604,7 +1702,7 @@ class MeteoSwissRadarCard extends HTMLElement {
       this._pause();
       this._startRecoveryTimer();
     }
-    this._showBanner("Radar frames unavailable — retrying");
+    this._showBanner(tr(this._lang, "frames_retrying"));
   }
 
   // Called from both recovery signals the issue names: a first successful
@@ -1879,9 +1977,9 @@ class MeteoSwissRadarCard extends HTMLElement {
   _updateLabel() {
     const f = this._frames[this._frameIndex];
     if (!f || !this._label) return;
-    const type = f.type === "measurement" ? "Measurement" : "Forecast";
+    const type = tr(this._lang, f.type === "measurement" ? "measurement" : "forecast");
     // shortLabel is precomputed at manifest-parse time; fall back for safety.
-    const mainText = f.shortLabel || `${weekdayShort(f.ts)} ${f.day.slice(0, 3)} · ${f.timepoint}`;
+    const mainText = f.shortLabel || this._frameLabel(f);
     const large = !!this._config.large_label;
     this._label.classList.toggle("large", large);
     // Only write textContent when the value actually changed to avoid layout thrash.

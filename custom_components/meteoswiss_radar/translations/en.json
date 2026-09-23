@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Adds the MeteoSwiss radar proxy, the `meteoswiss-radar-card` Lovelace card, and local rain-nowcast entities for the Home Assistant location. No settings required."
+        "description": "Adds the MeteoSwiss radar proxy, the `meteoswiss-radar-card` Lovelace card, and local rain-nowcast entities for the Home Assistant location. No settings required.\n\nAfterwards, reload the browser tab (in the Companion app: reset the frontend cache) — otherwise dashboards report \"Custom element doesn't exist: meteoswiss-radar-card\"."
       }
     },
     "abort": {
