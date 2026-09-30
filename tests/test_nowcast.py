@@ -27,11 +27,50 @@ class _ClientError(Exception):
     """Stand-in for aiohttp.ClientError."""
 
 
+class _FakeResponse:
+    """Stand-in for aiohttp.web.Response.
+
+    Mirrors the richer stub in test_proxy.py.  Both test modules register
+    lightweight stubs into ``sys.modules`` with ``setdefault`` at import time,
+    and this module is collected first — so whichever attributes the proxy code
+    (exercised by test_proxy) touches must exist here too, or the shared cached
+    integration module ends up bound to an incomplete ``web`` stub.
+    """
+
+    def __init__(
+        self,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        charset: str | None = None,
+        headers: dict | None = None,
+        status: int = 200,
+    ) -> None:
+        self.status = status
+        self.body = body
+        self._explicit_headers = headers or {}
+        self.compression_enabled = False
+
+    def enable_compression(self) -> None:
+        self.compression_enabled = True
+
+
+class _FakeFileResponse:
+    """Stand-in for aiohttp.web.FileResponse."""
+
+    def __init__(self, path, *, headers: dict | None = None, **_kw) -> None:  # noqa: ANN001
+        self.path = path
+        self.status = 200
+        self._explicit_headers = headers or {}
+        self.compression_enabled = False
+
+    def enable_compression(self) -> None:
+        self.compression_enabled = True
+
+
 class _FakeWeb:
-    class Response:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.status = kwargs.get("status", 200)
-            self.body = kwargs.get("body", b"")
+    Response = _FakeResponse
+    FileResponse = _FakeFileResponse
 
 
 def _make_stubs() -> dict[str, ModuleType]:
@@ -50,6 +89,7 @@ def _make_stubs() -> dict[str, ModuleType]:
         pass
 
     ha_http.HomeAssistantView = _HAView  # type: ignore[attr-defined]
+    ha_http.StaticPathConfig = MagicMock()  # type: ignore[attr-defined]
 
     ha_frontend = ModuleType("homeassistant.components.frontend")
     ha_frontend.add_extra_js_url = lambda *a, **kw: None  # type: ignore[attr-defined]
@@ -57,6 +97,13 @@ def _make_stubs() -> dict[str, ModuleType]:
 
     ha_cfg = ModuleType("homeassistant.config_entries")
     ha_cfg.ConfigEntry = object  # type: ignore[attr-defined]
+
+    class _ConfigFlow:
+        def __init_subclass__(cls, domain: str | None = None, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+
+    ha_cfg.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
+    ha_cfg.ConfigFlowResult = dict  # type: ignore[attr-defined]
 
     ha_update = ModuleType("homeassistant.helpers.update_coordinator")
 
@@ -157,7 +204,10 @@ def _fake_upstream(
 
 def _inject_session(view: MeteoSwissRadarProxyView, session: object) -> None:
     """Point async_get_clientsession at our fake session for this call."""
-    ha_client = _STUBS["homeassistant.helpers.aiohttp_client"]
+    # Mutate the module actually registered in sys.modules, not this file's
+    # private _STUBS copy: whichever test module won the setdefault race owns
+    # the stub the imported integration is bound to.
+    ha_client = sys.modules["homeassistant.helpers.aiohttp_client"]
     ha_client.async_get_clientsession.return_value = session
 
 

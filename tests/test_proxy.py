@@ -123,6 +123,17 @@ _STUBS = _make_stubs()
 for _name, _mod in _STUBS.items():
     sys.modules.setdefault(_name, _mod)
 
+# Another test module collected earlier (e.g. test_nowcast) may have won the
+# setdefault race and registered its own equivalent stubs — those are the
+# classes the imported integration is actually bound to. Rebind our local
+# references to the registered stubs so identity checks in the tests below
+# (`isinstance(resp, _FakeFileResponse)`, `except aiohttp.ClientError`) match
+# the objects the integration constructs and raises.
+_ClientError = sys.modules["aiohttp"].ClientError
+_FakeWeb = sys.modules["aiohttp"].web
+_FakeResponse = _FakeWeb.Response
+_FakeFileResponse = _FakeWeb.FileResponse
+
 # Import after stubs are in place.
 from custom_components.meteoswiss_radar import (  # noqa: E402
     MeteoSwissRadarCardView,
@@ -240,7 +251,11 @@ def _counting_upstream(
 
 def _inject_session(view: MeteoSwissRadarProxyView, session: object) -> None:
     """Point async_get_clientsession at our fake session for this call."""
-    ha_client = _STUBS["homeassistant.helpers.aiohttp_client"]
+    # Mutate the module actually registered in sys.modules, not this file's
+    # private _STUBS copy: another test module (collected earlier) may have won
+    # the setdefault race and registered its own stub, which is the one the
+    # imported integration is bound to.
+    ha_client = sys.modules["homeassistant.helpers.aiohttp_client"]
     ha_client.async_get_clientsession.return_value = session
 
 
