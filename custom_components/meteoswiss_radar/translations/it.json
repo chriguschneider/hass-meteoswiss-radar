@@ -3,11 +3,22 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Aggiunge il proxy radar MeteoSwiss e la scheda Lovelace `meteoswiss-radar-card`. Nessuna impostazione necessaria.\n\nPoi ricarica la scheda del browser (nell'app Companion: reimposta la cache del frontend) — altrimenti le dashboard mostrano \"Custom element doesn't exist: meteoswiss-radar-card\"."
+        "description": "Aggiunge il proxy radar MeteoSwiss, la scheda Lovelace `meteoswiss-radar-card` e le entità locali di nowcasting della pioggia per la posizione di Home Assistant. Nessuna impostazione necessaria.\n\nPoi ricarica la scheda del browser (nell'app Companion: reimposta la cache del frontend) — altrimenti le dashboard mostrano \"Custom element doesn't exist: meteoswiss-radar-card\"."
       }
     },
     "abort": {
       "single_instance_allowed": "Già configurato. È consentita una sola istanza."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "nowcast_status": {"name": "Stato nowcasting pioggia"},
+      "rain_in": {"name": "Pioggia tra"},
+      "rain_start": {"name": "Inizio pioggia"},
+      "rain_end": {"name": "Fine pioggia"}
+    },
+    "binary_sensor": {
+      "rain_protection": {"name": "Protezione dalla pioggia"}
     }
   }
 }
