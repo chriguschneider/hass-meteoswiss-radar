@@ -37,7 +37,16 @@ class MeteoSwissRadarConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class MeteoSwissRadarOptionsFlow(OptionsFlow):
-    """Toggle the local nowcast entities (#197)."""
+    """Toggle the local nowcast entities (#197).
+
+    Plain `OptionsFlow` plus a config-entry update listener, not
+    `OptionsFlowWithReload`: that base class only exists from HA 2025.8 and the
+    manifest still supports 2024.7.0. It is the better fit once the floor rises
+    -- it reloads only when the options actually changed, where our listener
+    fires on any entry update (a title rename reloads too) -- but it forbids
+    update listeners, so the swap has to happen in one move together with
+    dropping `_async_options_updated`.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
