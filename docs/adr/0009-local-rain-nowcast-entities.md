@@ -54,11 +54,23 @@ swisstopo approximation constants. A change to `FORMAT.md` or to either
 decoder implementation requires updating both implementations and the
 cross-check test in `tests/test_nowcast_core_local.py`.
 
-Frame colours `333e48` (background grey) and `ffffff` (no-data / outside
-coverage) are treated as non-precipitation. All other colours in the
-`areas[]` array represent measurable precipitation and count as wet. This
-mapping matches the MeteoSwiss RZC/INCA legend and was confirmed by
-inspection of live frames during the initial implementation review.
+Precipitation detection is currently an exclusion list: frame colours `333e48`
+(background grey) and `ffffff` (no-data / outside coverage) are treated as
+non-precipitation, and every other colour in `areas[]` counts as wet.
+
+**This is provisional, not a decision to preserve** (#195). It is an exclusion
+list where an allowlist belongs, and `FORMAT.md` documents why that is fragile:
+a frame may carry more areas (observed: 11) than the 9 legend bands, and the
+area colours differ from the legend colours (`9e849a` against legend
+`#9A7E95`). Any colour the list does not name — including a future upstream
+change to the background hex — therefore reads as rain, which would latch the
+rain-protection sensor on. The list also has no intensity threshold: the lowest
+legend band starts at 0 mm/h, so the decision rests on the regime where radar is
+least reliable.
+
+#195 replaces this with an allowlist derived from `legend[]` plus a threshold.
+Until it lands, treat the two hex values above as a description of what the code
+does, not as a mapping that was validated against the legend.
 
 ## Consequences
 
