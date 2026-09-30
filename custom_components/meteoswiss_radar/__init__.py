@@ -505,6 +505,14 @@ async def _async_setup_nowcast(
         latitude=latitude,
         longitude=longitude,
     )
+    await coordinator.async_refresh()
+    if coordinator.location_in_radar_coverage is False:
+        _LOGGER.info(
+            "Home location is outside MeteoSwiss radar coverage; "
+            "local nowcast entities skipped"
+        )
+        return
+
     domain_data = hass.data.setdefault(DATA_NOWCAST, {})
     domain_data[entry.entry_id] = {"nowcast_coordinator": coordinator}
 
@@ -518,12 +526,6 @@ async def _async_setup_nowcast(
         if not domain_data:
             hass.data.pop(DATA_NOWCAST, None)
         raise
-
-    entry.async_create_background_task(
-        hass,
-        coordinator.async_refresh(),
-        "MeteoSwiss Radar initial local nowcast refresh",
-    )
 
 
 async def _async_unload_nowcast(
