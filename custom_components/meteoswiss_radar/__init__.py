@@ -463,7 +463,9 @@ class MeteoSwissRadarVendorView(HomeAssistantView):
 
 # Routes (the two HTTP views and the static vendor mounts) can only be
 # registered once per HA run: HA has no API to unregister a view or a static
-# path, so a config-entry reload must not re-register them.
+# path, so a config-entry reload must not re-register them. This flag is
+# deliberately NOT cleared on unload -- unlike the card resource below, the
+# routes genuinely survive an unload (verified against HA 2024.7 core).
 _ROUTES_KEY = f"{DOMAIN}_routes_registered"
 _PROXY_KEY = f"{DOMAIN}_proxy_view"
 _ENTRY_SETUP_KEY = f"{DOMAIN}_entries_setup"
@@ -552,6 +554,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         proxy = MeteoSwissRadarProxyView(hass)
         hass.http.register_view(proxy)
         hass.http.register_view(MeteoSwissRadarCardView())
+        # A view (not a static mount): the {tag} in the vendor URL must map to the
+        # same on-disk files regardless of which version stamped it, so old and new
+        # cards both resolve across an upgrade or a restart-free JS update (#70).
         hass.http.register_view(MeteoSwissRadarVendorView())
         hass.data[_PROXY_KEY] = proxy
         hass.data[_ROUTES_KEY] = True
@@ -585,7 +590,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _register_card_resource(hass: HomeAssistant) -> None:
-    """Add the card's extra-JS URL to every dashboard once per active entry."""
+    """Add the card's extra-JS URL to every dashboard, once per active entry.
+
+    The card's extra-JS URL is removed on unload, so it must be re-added on
+    every setup -- otherwise a reload (UI "Reload", disable/enable, or
+    homeassistant.reload_config_entry) leaves every dashboard without the card
+    until a full HA restart (issue #67).
+    """
     if hass.data.get(DOMAIN):
         return
     add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/{CARD_FILENAME}")
