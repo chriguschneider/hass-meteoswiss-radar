@@ -44,6 +44,22 @@ Fetch only the warning lead window while dry. Extend the forecast adaptively
 while rain is approaching or active so the integration can estimate event end
 without imposing the long-frame fetch cost on every update.
 
+The chain-code contour decoder exists in two places by necessity: the Lovelace
+card (`decodeContourInto` in `meteoswiss-radar-card.js`) requires lat/lng output
+into a `Float32Array` for canvas rendering; the backend
+(`_decode_contour_grid` in `nowcast_core.py`) requires grid-km output so
+point-in-polygon checks run without coordinate conversion on every call.
+`FORMAT.md` is the single source of truth for the frame format and the
+swisstopo approximation constants. A change to `FORMAT.md` or to either
+decoder implementation requires updating both implementations and the
+cross-check test in `tests/test_nowcast_core_local.py`.
+
+Frame colours `333e48` (background grey) and `ffffff` (no-data / outside
+coverage) are treated as non-precipitation. All other colours in the
+`areas[]` array represent measurable precipitation and count as wet. This
+mapping matches the MeteoSwiss RZC/INCA legend and was confirmed by
+inspection of live frames during the initial implementation review.
+
 ## Consequences
 
 - Automations can consume the same radar data as the card through stable Home
@@ -56,5 +72,13 @@ without imposing the long-frame fetch cost on every update.
   Assistant.
 - Conservative unknown handling can keep rain protection active longer than a
   best-effort forecast would, which is intentional for safety-oriented uses.
-- Changes to warning lead time, dry-window semantics, proxy reuse, or the
-  nowcast module boundary should update this ADR.
+- The decoder duplication is guarded by a cross-check test in
+  `tests/test_nowcast_core_local.py`: it decodes the same `frame.json`
+  fixture with the Python decoder, converts grid-km output to lat/lng using
+  the same swisstopo formula (inline in the test, not in production code),
+  rounds to float32, and compares exactly against `frame_decoded.json` (the
+  JS decoder's committed golden). A one-constant drift in either decoder
+  fails CI.
+- Changes to warning lead time, dry-window semantics, proxy reuse, the
+  nowcast module boundary, the colour-to-precipitation mapping, or either
+  decoder implementation should update this ADR.
