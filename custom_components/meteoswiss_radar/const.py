@@ -3,6 +3,13 @@
 DOMAIN = "meteoswiss_radar"
 DATA_NOWCAST = f"{DOMAIN}_nowcast_data"
 
+# Opt-in for the local nowcast entities (#197). Off by default: someone who
+# installed this for the card should not also get five entities and a 5-minute
+# poller -- the same reasoning that keeps the radar and weather integrations
+# apart (weather ADR-0003: "users who want only the map should not get a
+# weather entity, and vice versa").
+OPT_NOWCAST_ENABLED = "nowcast_enabled"
+
 # Keep in sync with manifest.json and the card's CARD_VERSION.
 VERSION = "0.15.0"
 

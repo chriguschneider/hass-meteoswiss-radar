@@ -3,22 +3,45 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Adds the MeteoSwiss radar proxy, the `meteoswiss-radar-card` Lovelace card, and local rain-nowcast entities for the Home Assistant location. No settings required.\n\nAfterwards, reload the browser tab (in the Companion app: reset the frontend cache) — otherwise dashboards report \"Custom element doesn't exist: meteoswiss-radar-card\"."
+        "description": "Adds the MeteoSwiss radar proxy and the `meteoswiss-radar-card` Lovelace card. Local rain-nowcast entities are optional and off by default — enable them under Configure after setup.\n\nAfterwards, reload the browser tab (in the Companion app: reset the frontend cache) — otherwise dashboards report \"Custom element doesn't exist: meteoswiss-radar-card\"."
       }
     },
     "abort": {
       "single_instance_allowed": "Already configured. Only a single instance is allowed."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MeteoSwiss Radar options",
+        "data": {
+          "nowcast_enabled": "Local rain-nowcast entities"
+        },
+        "data_description": {
+          "nowcast_enabled": "Evaluates the radar at the Home Assistant location and adds rain-nowcast sensors plus a rain-protection binary sensor for automations. Polls MeteoSwiss every 5 minutes while enabled; leave it off if you only want the card."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
-      "nowcast_status": {"name": "Rain nowcast status"},
-      "rain_in": {"name": "Rain in"},
-      "rain_start": {"name": "Rain start"},
-      "expected_dry_from": {"name": "Expected dry again from"}
+      "nowcast_status": {
+        "name": "Rain nowcast status"
+      },
+      "rain_in": {
+        "name": "Rain in"
+      },
+      "rain_start": {
+        "name": "Rain start"
+      },
+      "expected_dry_from": {
+        "name": "Expected dry again from"
+      }
     },
     "binary_sensor": {
-      "rain_protection": {"name": "Rain protection"}
+      "rain_protection": {
+        "name": "Rain protection"
+      }
     }
   }
 }

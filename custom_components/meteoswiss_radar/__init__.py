@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from aiohttp import ClientError, ClientTimeout, web
@@ -30,6 +31,7 @@ from .const import (
     DATA_NOWCAST,
     DOMAIN,
     FRONTEND_URL_BASE,
+    OPT_NOWCAST_ENABLED,
     PROXY_URL,
     UPSTREAM_BASE,
 )
@@ -472,6 +474,41 @@ _ENTRY_SETUP_KEY = f"{DOMAIN}_entries_setup"
 _NOWCAST_PLATFORMS = ("sensor", "binary_sensor")
 
 
+def _entry_has_nowcast_entities(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Return whether this entry already owns nowcast entities in the registry."""
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    return any(
+        registry_entry.domain in _NOWCAST_PLATFORMS
+        for registry_entry in er.async_entries_for_config_entry(
+            registry, entry.entry_id
+        )
+    )
+
+
+def nowcast_entities_enabled(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Return whether the local nowcast entities are enabled for this entry.
+
+    The option defaults to off (#197), but an entry created before the option
+    existed already has entities and possibly an automation depending on them.
+    Rather than writing a migrated value during setup -- which would trip the
+    update listener and reload us mid-setup -- the absence of an explicit choice
+    is resolved from the registry every time. The first visit to the options
+    dialog then persists a real boolean.
+    """
+    options = getattr(entry, "options", None)
+    stored = options.get(OPT_NOWCAST_ENABLED) if isinstance(options, Mapping) else None
+    if isinstance(stored, bool):
+        return stored
+    return _entry_has_nowcast_entities(hass, entry)
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload so toggling the option creates or removes the entities at once."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 def _home_location(hass: HomeAssistant) -> tuple[float, float] | None:
     """Return a valid numeric Home Assistant location, if available."""
     latitude = getattr(hass.config, "latitude", None)
@@ -575,8 +612,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.entry_id in entries:
         return True
 
-    location = _home_location(hass)
-    if location is not None:
+    # Registered after the idempotency guard so a repeated setup without an
+    # intervening unload does not stack listeners; async_on_unload drops it
+    # again, so a real reload re-registers exactly one.
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    if not nowcast_entities_enabled(hass, entry):
+        _LOGGER.debug("Local nowcast entities are disabled for this entry")
+    elif (location := _home_location(hass)) is not None:
         await _async_setup_nowcast(
             hass,
             entry,

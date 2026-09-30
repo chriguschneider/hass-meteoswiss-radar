@@ -45,6 +45,9 @@ Assistant dashboard.
 - **No YAML needed.** There's a visual editor, and the defaults just work.
 - **When MeteoSwiss changes something upstream**, you get a small banner
   instead of a broken map.
+- **Optional rain-nowcast entities** for automations — "is it raining at my
+  house, and is rain due in the next half hour" — off by default, from the same
+  radar data. See [`LOCAL_NOWCAST.md`](LOCAL_NOWCAST.md).
 
 ## Install
 
