@@ -3,22 +3,45 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Fügt den MeteoSwiss-Radar-Proxy, die Lovelace-Karte `meteoswiss-radar-card` und lokale Regen-Nowcast-Entitäten für den Home-Assistant-Standort hinzu. Keine Einstellungen nötig.\n\nDanach den Browser-Tab neu laden (in der Companion-App: Frontend-Cache zurücksetzen) — sonst melden Dashboards \"Custom element doesn't exist: meteoswiss-radar-card\"."
+        "description": "Fügt den MeteoSwiss-Radar-Proxy und die Lovelace-Karte `meteoswiss-radar-card` hinzu. Lokale Regen-Nowcast-Entitäten sind optional und standardmässig deaktiviert — sie lassen sich nach der Einrichtung unter «Konfigurieren» aktivieren.\n\nLade anschliessend den Browser-Tab neu (in der Companion-App: Frontend-Cache zurücksetzen) — sonst melden Dashboards «Custom element doesn't exist: meteoswiss-radar-card»."
       }
     },
     "abort": {
       "single_instance_allowed": "Bereits eingerichtet. Es ist nur eine Instanz möglich."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "MeteoSwiss Radar Optionen",
+        "data": {
+          "nowcast_enabled": "Lokale Regen-Nowcast-Entitäten"
+        },
+        "data_description": {
+          "nowcast_enabled": "Wertet das Radar am Standort von Home Assistant aus und ergänzt Regen-Nowcast-Sensoren sowie einen binären Regenschutz-Sensor für Automationen. Ruft MeteoSwiss alle 5 Minuten ab, solange aktiviert; deaktiviert lassen, wenn nur die Karte gewünscht ist."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
-      "nowcast_status": {"name": "Regen-Nowcast Status"},
-      "rain_in": {"name": "Regen in"},
-      "rain_start": {"name": "Regenbeginn"},
-      "expected_dry_from": {"name": "Voraussichtlich trocken ab"}
+      "nowcast_status": {
+        "name": "Regen-Nowcast Status"
+      },
+      "rain_in": {
+        "name": "Regen in"
+      },
+      "rain_start": {
+        "name": "Regenbeginn"
+      },
+      "expected_dry_from": {
+        "name": "Voraussichtlich trocken ab"
+      }
     },
     "binary_sensor": {
-      "rain_protection": {"name": "Regenschutz"}
+      "rain_protection": {
+        "name": "Regenschutz"
+      }
     }
   }
 }

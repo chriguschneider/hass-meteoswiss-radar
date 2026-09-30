@@ -100,6 +100,11 @@ def _make_stubs() -> dict[str, ModuleType]:
 
     ha_cfg.ConfigFlow = _ConfigFlow  # type: ignore[attr-defined]
     ha_cfg.ConfigFlowResult = dict  # type: ignore[attr-defined]
+
+    class _OptionsFlow:
+        """Stand-in for OptionsFlow; HA supplies hass/config_entry for real."""
+
+    ha_cfg.OptionsFlow = _OptionsFlow  # type: ignore[attr-defined]
     ha_core = ModuleType("homeassistant.core")
     ha_core.HomeAssistant = object  # type: ignore[attr-defined]
     # Identity stand-in for homeassistant.core.callback.  The entity modules
@@ -109,6 +114,34 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha_helpers = ModuleType("homeassistant.helpers")
     ha_client = ModuleType("homeassistant.helpers.aiohttp_client")
     ha_client.async_get_clientsession = MagicMock()  # type: ignore[attr-defined]
+
+    # Entity registry stub for the nowcast opt-in migration (#197). `entries`
+    # is what a test sets to say "this entry already owns these entities".
+    # voluptuous ships with Home Assistant, not with the stdlib-only test env.
+    # The options flow only builds a schema, so a pass-through is enough.
+    vol = ModuleType("voluptuous")
+
+    class _Marker:
+        def __init__(self, key: str, default: object = None) -> None:
+            self.key = key
+            self.default = default
+
+        def __hash__(self) -> int:
+            return hash(self.key)
+
+        def __eq__(self, other: object) -> bool:
+            return self.key == getattr(other, "key", other)
+
+    vol.Schema = lambda schema, **kwargs: schema  # type: ignore[attr-defined]
+    vol.Required = _Marker  # type: ignore[attr-defined]
+    vol.Optional = _Marker  # type: ignore[attr-defined]
+
+    ha_er = ModuleType("homeassistant.helpers.entity_registry")
+    ha_er.entries = []  # type: ignore[attr-defined]
+    ha_er.async_get = lambda hass: ha_er  # type: ignore[attr-defined]
+    ha_er.async_entries_for_config_entry = (  # type: ignore[attr-defined]
+        lambda registry, entry_id: list(registry.entries)
+    )
 
     return {
         "aiohttp": aiohttp,
@@ -120,6 +153,8 @@ def _make_stubs() -> dict[str, ModuleType]:
         "homeassistant.core": ha_core,
         "homeassistant.helpers": ha_helpers,
         "homeassistant.helpers.aiohttp_client": ha_client,
+        "homeassistant.helpers.entity_registry": ha_er,
+        "voluptuous": vol,
     }
 
 
@@ -137,6 +172,19 @@ _ClientError = sys.modules["aiohttp"].ClientError
 _FakeWeb = sys.modules["aiohttp"].web
 _FakeResponse = _FakeWeb.Response
 _FakeFileResponse = _FakeWeb.FileResponse
+
+# The winning stub may predate attributes only this module needs (config_flow
+# imports OptionsFlow and callback). Fill those in on whatever module won rather
+# than copying the whole stub set into every test file -- that duplication is
+# what makes this scaffolding brittle in the first place (#207).
+for _mod_name, _attrs in (
+    ("homeassistant.config_entries", ("OptionsFlow",)),
+    ("homeassistant.core", ("callback",)),
+):
+    _registered = sys.modules[_mod_name]
+    for _attr in _attrs:
+        if not hasattr(_registered, _attr):
+            setattr(_registered, _attr, getattr(_STUBS[_mod_name], _attr))
 
 # Import after stubs are in place.
 from custom_components.meteoswiss_radar import (  # noqa: E402
@@ -1459,3 +1507,136 @@ def test_async_unload_entry_removes_card_resource(
 
     assert removed == ["/meteoswiss_radar/frontend/meteoswiss-radar-card.js"]
     assert _integration.DOMAIN not in hass.data
+
+
+# ---------------------------------------------------------------------------
+# Tests: local nowcast opt-in (#197)
+# ---------------------------------------------------------------------------
+
+def _registry_stub():
+    """The registered entity_registry stub (another module may have won setdefault)."""
+    return sys.modules["homeassistant.helpers.entity_registry"]
+
+
+def _registry_entry(domain: str):
+    """A registry entry stand-in exposing only the `.domain` the gate reads."""
+    entry = MagicMock()
+    entry.domain = domain
+    return entry
+
+
+def _entry_with_options(options: dict):
+    """A config entry whose `options` is a real Mapping, not a MagicMock.
+
+    The gate ignores a non-Mapping `options` on purpose, so a bare MagicMock
+    entry (what the other lifecycle tests use) reads as "no explicit choice".
+    """
+    entry = MagicMock()
+    entry.options = options
+    entry.entry_id = "entry-197"
+    return entry
+
+
+def _hass_in_switzerland():
+    hass = MagicMock()
+    hass.data = {}
+    hass.http.async_register_static_paths = AsyncMock()
+    # Zurich: a location the nowcast would happily accept, so the only thing
+    # deciding these tests is the opt-in itself.
+    hass.config.latitude = 47.3769
+    hass.config.longitude = 8.5417
+    return hass
+
+
+def _setup_and_record(hass, entry, monkeypatch: pytest.MonkeyPatch) -> list:
+    """Run async_setup_entry with the nowcast setup replaced by a recorder."""
+    calls: list = []
+
+    async def _record(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(_integration, "_async_setup_nowcast", _record)
+    monkeypatch.setattr(_integration, "add_extra_js_url", lambda hass, url: None)
+    _run(async_setup_entry(hass, entry))
+    return calls
+
+
+def test_nowcast_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh entry gets no nowcast entities: the option defaults to off (#197)."""
+    _registry_stub().entries = []
+    calls = _setup_and_record(
+        _hass_in_switzerland(), _entry_with_options({}), monkeypatch
+    )
+
+    assert calls == [], "nowcast must not be set up without the opt-in"
+
+
+def test_nowcast_option_enables_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-in switches the entities on."""
+    _registry_stub().entries = []
+    calls = _setup_and_record(
+        _hass_in_switzerland(),
+        _entry_with_options({"nowcast_enabled": True}),
+        monkeypatch,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["latitude"] == 47.3769
+
+
+def test_existing_entities_migrate_to_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An entry that predates the option keeps its entities.
+
+    Someone running v0.15.0/v0.16.0 already has a rain-protection binary sensor
+    wired into an automation; introducing the option must not silently take it
+    away, so an entry that already owns nowcast entities reads as enabled.
+    """
+    _registry_stub().entries = [_registry_entry("binary_sensor")]
+    calls = _setup_and_record(
+        _hass_in_switzerland(), _entry_with_options({}), monkeypatch
+    )
+
+    assert len(calls) == 1, "an entry with existing nowcast entities must stay enabled"
+
+
+def test_explicit_opt_out_beats_existing_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turning the option off removes the entities even though they exist."""
+    _registry_stub().entries = [_registry_entry("sensor")]
+    calls = _setup_and_record(
+        _hass_in_switzerland(),
+        _entry_with_options({"nowcast_enabled": False}),
+        monkeypatch,
+    )
+
+    assert calls == [], "an explicit False must win over the registry fallback"
+
+
+def test_unrelated_entities_do_not_enable_nowcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only sensor/binary_sensor entities of this entry imply the old behaviour."""
+    _registry_stub().entries = [_registry_entry("camera")]
+    calls = _setup_and_record(
+        _hass_in_switzerland(), _entry_with_options({}), monkeypatch
+    )
+
+    assert calls == []
+
+
+def test_setup_registers_one_options_update_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Toggling the option must reload the entry, and only one listener is added."""
+    _registry_stub().entries = []
+    hass = _hass_in_switzerland()
+    entry = _entry_with_options({})
+    _setup_and_record(hass, entry, monkeypatch)
+
+    assert entry.add_update_listener.call_count == 1
+    assert entry.async_on_unload.call_count == 1
+
+    # A second setup without an unload short-circuits, so no second listener.
+    _setup_and_record(hass, entry, monkeypatch)
+    assert entry.add_update_listener.call_count == 1

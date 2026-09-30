@@ -3,22 +3,45 @@
     "step": {
       "user": {
         "title": "MeteoSwiss Radar",
-        "description": "Aggiunge il proxy radar MeteoSwiss, la scheda Lovelace `meteoswiss-radar-card` e le entità locali di nowcasting della pioggia per la posizione di Home Assistant. Nessuna impostazione necessaria.\n\nPoi ricarica la scheda del browser (nell'app Companion: reimposta la cache del frontend) — altrimenti le dashboard mostrano \"Custom element doesn't exist: meteoswiss-radar-card\"."
+        "description": "Aggiunge il proxy radar MeteoSwiss e la card Lovelace `meteoswiss-radar-card`. Le entità di nowcast della pioggia locale sono opzionali e disattivate per impostazione predefinita — abilitale da «Configura» dopo l'installazione.\n\nRicarica poi la schede del browser (nell'app Companion: reimposta la cache del frontend) — altrimenti le dashboard segnalano «Custom element doesn't exist: meteoswiss-radar-card»."
       }
     },
     "abort": {
       "single_instance_allowed": "Già configurato. È consentita una sola istanza."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opzioni MeteoSwiss Radar",
+        "data": {
+          "nowcast_enabled": "Entità di nowcast della pioggia locale"
+        },
+        "data_description": {
+          "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant e aggiunge sensori di nowcast della pioggia e un sensore binario di protezione dalla pioggia per le automazioni. Interroga MeteoSwiss ogni 5 minuti quando è attiva; lasciala disattivata se vuoi solo la card."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
-      "nowcast_status": {"name": "Stato nowcasting pioggia"},
-      "rain_in": {"name": "Pioggia tra"},
-      "rain_start": {"name": "Inizio pioggia"},
-      "expected_dry_from": {"name": "Di nuovo asciutto previsto da"}
+      "nowcast_status": {
+        "name": "Stato nowcasting pioggia"
+      },
+      "rain_in": {
+        "name": "Pioggia tra"
+      },
+      "rain_start": {
+        "name": "Inizio pioggia"
+      },
+      "expected_dry_from": {
+        "name": "Di nuovo asciutto previsto da"
+      }
     },
     "binary_sensor": {
-      "rain_protection": {"name": "Protezione dalla pioggia"}
+      "rain_protection": {
+        "name": "Protezione dalla pioggia"
+      }
     }
   }
 }
