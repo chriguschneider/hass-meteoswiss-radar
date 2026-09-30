@@ -83,10 +83,42 @@ Changes:
 Local `npm run coverage` reports the card at ~81 % line coverage, enough to
 clear the gate's 80 % `new_coverage` threshold.
 
+## Update 2026-09-30 (issue #201): fork PRs are analysed after merge, not on the PR
+
+"Every PR receives a SonarCloud quality-gate check" below was written for
+same-repo branches and is not true for a fork. GitHub withholds repository
+secrets from `pull_request` runs originating in a fork, so `SONAR_TOKEN` is
+empty and the scanner fails before it analyses anything:
+
+```
+ERROR Not authorized or project not found. Please check the 'SONAR_TOKEN'
+      environment variable ...
+INFO  EXECUTION FAILURE
+```
+
+This surfaced on #190, the first substantial outside contribution: eight checks
+green, SonarCloud red, with a log that reads like a misconfiguration on the
+contributor's side. Neither they nor a reviewer can clear it.
+
+The job is therefore skipped when the head repository is not this one. The
+alternative, `pull_request_target`, would supply the secret but checks out the
+fork's code with repository secrets in scope — handing an untrusted contributor
+the token. For a repo that accepts outside contributions that trade is wrong, so
+fork contributions are covered by the `master` analysis after merge, where the
+gate has always been authoritative.
+
+Note this is distinct from a gate that fails *on its merits*: on `master` after
+#190 the scanner ran fine and the gate failed on `new_coverage` (74.6 % against
+an 80 % threshold), which is a real coverage gap in the new entity layer, tracked
+separately.
+
 ## Consequences
 
-- Every PR receives a SonarCloud quality-gate check; gate failures block
-  merge instead of surfacing post-merge.
+- Every PR **from this repository** receives a SonarCloud quality-gate check;
+  gate failures block merge instead of surfacing post-merge. Fork PRs skip the
+  job and are analysed on `master` after merge (see the Update above).
+- Because SonarCloud is not a required status check, a red gate on `master` does
+  not block subsequent merges — it has to be watched, not relied upon.
 - Python and JS line coverage are both tracked over time (JS coverage was
   absent before issue #171; see the Update above).
 - The workflow file must be authored and merged by a human (agent
