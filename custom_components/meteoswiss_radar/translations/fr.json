@@ -15,7 +15,7 @@
       "nowcast_status": {"name": "État de la prévision immédiate de pluie"},
       "rain_in": {"name": "Pluie dans"},
       "rain_start": {"name": "Début de la pluie"},
-      "rain_end": {"name": "Fin de la pluie"}
+      "expected_dry_from": {"name": "Sec à nouveau prévu à partir de"}
     },
     "binary_sensor": {
       "rain_protection": {"name": "Protection contre la pluie"}

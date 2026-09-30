@@ -15,7 +15,7 @@
       "nowcast_status": {"name": "Stato nowcasting pioggia"},
       "rain_in": {"name": "Pioggia tra"},
       "rain_start": {"name": "Inizio pioggia"},
-      "rain_end": {"name": "Fine pioggia"}
+      "expected_dry_from": {"name": "Di nuovo asciutto previsto da"}
     },
     "binary_sensor": {
       "rain_protection": {"name": "Protezione dalla pioggia"}

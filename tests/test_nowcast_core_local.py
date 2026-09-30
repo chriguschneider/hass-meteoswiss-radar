@@ -133,6 +133,61 @@ def test_missing_measurement_does_not_clear_active_event() -> None:
     assert result.protection_active is True
 
 
+def test_event_end_beyond_2h_cap_is_suppressed_while_active() -> None:
+    # Wet frames fill the 2-hour window; dry window starts at +130 min (>2 h).
+    samples = forecast([True] * 12 + [False] * 4, start=10)
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(True),
+        forecast_samples=samples,
+        previous=previous_active(),
+    )
+
+    assert result.status == core.RainStatus.ACTIVE
+    assert result.event_end is None
+    assert result.event_end_open is True
+
+
+def test_event_end_within_2h_cap_is_reported_while_active() -> None:
+    # Dry window starts at +50 min, well within the 2-hour cap.
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast(
+            [False, True, True, True, False, False, False, False]
+        ),
+        previous=previous_active(),
+    )
+
+    assert result.status == core.RainStatus.ACTIVE
+    assert result.event_end == NOW + timedelta(minutes=50)
+    assert result.event_end_open is False
+
+
+def test_event_end_beyond_2h_cap_is_suppressed_while_approaching() -> None:
+    # Rain at +20 min; dry window starts at +130 min (>2 h from NOW).
+    samples = [
+        core.RainSample(NOW + timedelta(minutes=10), False, "forecast"),
+        *[
+            core.RainSample(NOW + timedelta(minutes=10 + i * 10), True, "forecast")
+            for i in range(1, 13)
+        ],
+        *[
+            core.RainSample(NOW + timedelta(minutes=130 + i * 10), False, "forecast")
+            for i in range(4)
+        ],
+    ]
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=samples,
+    )
+
+    assert result.status == core.RainStatus.APPROACHING
+    assert result.event_end is None
+    assert result.event_end_open is True
+
+
 def test_wgs84_conversion_matches_swiss_radar_grid() -> None:
     x_km, y_km = core.wgs84_to_grid_km(47.4515, 8.584)
 

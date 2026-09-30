@@ -20,6 +20,9 @@ DEFAULT_DRY_WINDOW_MINUTES = 30
 DEFAULT_FORECAST_STEP_MINUTES = 10
 MAX_FORECAST_GAP_MINUTES = 15
 NON_PRECIPITATION_COLORS = {"333e48", "ffffff"}
+# Advection-based nowcasting is only reliable inside this window; beyond it the
+# predicted-dry sensor is suppressed rather than extrapolated.
+PREDICTED_DRY_HORIZON = timedelta(hours=2)
 
 
 class RainStatus(StrEnum):
@@ -300,6 +303,17 @@ def _unknown_in_lead_window(
     )
 
 
+def _cap_event_end(
+    event_end: datetime | None,
+    now: datetime,
+    horizon: timedelta = PREDICTED_DRY_HORIZON,
+) -> datetime | None:
+    """Return None if event_end lies beyond the reliable nowcast horizon."""
+    if event_end is None or event_end > now + horizon:
+        return None
+    return event_end
+
+
 def evaluate_nowcast(
     *,
     now: datetime,
@@ -359,12 +373,13 @@ def evaluate_nowcast(
         else:
             event_start = now
 
-        event_end = _first_confirmed_dry_window(
+        raw_end = _first_confirmed_dry_window(
             forecast,
             now,
             dry_window_minutes,
             forecast_step_minutes,
         )
+        event_end = _cap_event_end(raw_end, now)
         return RainNowcast(
             status=RainStatus.ACTIVE,
             protection_active=True,
@@ -382,12 +397,13 @@ def evaluate_nowcast(
     first_wet = next((sample for sample in forecast if sample.wet is True), None)
     lead_limit = now + timedelta(minutes=warning_lead_minutes)
     if first_wet is not None and first_wet.timestamp <= lead_limit:
-        event_end = _first_confirmed_dry_window(
+        raw_end = _first_confirmed_dry_window(
             forecast,
             first_wet.timestamp,
             dry_window_minutes,
             forecast_step_minutes,
         )
+        event_end = _cap_event_end(raw_end, now)
         return RainNowcast(
             status=RainStatus.APPROACHING,
             protection_active=True,

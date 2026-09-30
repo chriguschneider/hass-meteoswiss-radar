@@ -52,8 +52,8 @@ SENSORS: Final = (
         value="event_start",
     ),
     MeteoSwissRadarNowcastSensorDescription(
-        key="rain_end",
-        translation_key="rain_end",
+        key="expected_dry_from",
+        translation_key="expected_dry_from",
         icon="mdi:weather-sunny-alert",
         device_class=SensorDeviceClass.TIMESTAMP,
         value="event_end",
