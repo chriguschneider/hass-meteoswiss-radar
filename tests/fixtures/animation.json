@@ -1,0 +1,72 @@
+{
+  "map_images": [
+    {
+      "pictures": [
+        {
+          "data_type": "measurement",
+          "data_type_string": "Messung",
+          "radar_url": "/product/output/radar/rzc/radar_rzc.20240101_1200.json",
+          "day": "01.01.2024",
+          "timepoint": "12:00",
+          "timestamp": 1704110400
+        },
+        {
+          "data_type": "measurement",
+          "data_type_string": "Messung",
+          "radar_url": "/product/output/radar/rzc/radar_rzc.20240101_1205.json",
+          "day": "01.01.2024",
+          "timepoint": "12:05",
+          "timestamp": 1704110700
+        },
+        {
+          "data_type": "forecast",
+          "data_type_string": "Prognose",
+          "radar_url": "/product/output/inca/precipitation/rate/version__20240101_1200/rate_20240101_1210.json",
+          "snow_url": "/product/output/inca/precipitation/type/snow/version__20240101_0603/snow_20240101_1210.json",
+          "snowrain_url": "/product/output/inca/precipitation/type/snowrain/version__20240101_0603/snowrain_20240101_1210.json",
+          "freezingrain_url": "/product/output/inca/precipitation/type/freezing-rain/version__20240101_0605/freezingrain_20240101_1210.json",
+          "day": "01.01.2024",
+          "timepoint": "12:10",
+          "timestamp": 1704111000
+        },
+        {
+          "data_type": "forecast",
+          "data_type_string": "Prognose",
+          "radar_url": "/product/output/inca/precipitation/rate/version__20240101_1200/rate_20240101_1220.json",
+          "snow_url": "/product/output/inca/precipitation/type/snow/version__20240101_0603/snow_20240101_1220.json",
+          "snowrain_url": "/product/output/inca/precipitation/type/snowrain/version__20240101_0603/snowrain_20240101_1220.json",
+          "freezingrain_url": "/product/output/inca/precipitation/type/freezing-rain/version__20240101_0605/freezingrain_20240101_1220.json",
+          "day": "01.01.2024",
+          "timepoint": "12:20",
+          "timestamp": 1704111600
+        },
+        {
+          "data_type": "forecast",
+          "data_type_string": "Prognose",
+          "radar_url": "/product/output/inca/precipitation/rate/version__20240101_1200/rate_20240101_1300.json",
+          "snow_url": "/product/output/inca/precipitation/type/snow/version__20240101_0603/snow_20240101_1300.json",
+          "snowrain_url": "/product/output/inca/precipitation/type/snowrain/version__20240101_0603/snowrain_20240101_1300.json",
+          "freezingrain_url": "/product/output/inca/precipitation/type/freezing-rain/version__20240101_0605/freezingrain_20240101_1300.json",
+          "day": "01.01.2024",
+          "timepoint": "13:00",
+          "timestamp": 1704114000
+        }
+      ]
+    }
+  ],
+  "legend": [
+    {"min": 0, "max": 1, "color": "#9A7E95"},
+    {"min": 1, "max": 5, "color": "#7E8BA0"},
+    {"min": 5, "max": 10, "color": "#64A0C8"},
+    {"min": 10, "max": 20, "color": "#4D94FF"},
+    {"min": 20, "max": 30, "color": "#D1E8B0"},
+    {"min": 30, "max": 40, "color": "#C8D300"},
+    {"min": 40, "max": 50, "color": "#FFB900"},
+    {"min": 50, "max": 60, "color": "#FF9A00"},
+    {"min": 60, "color": "#AF00DD"}
+  ],
+  "cities": [],
+  "config": {
+    "timestamp": 1704110400
+  }
+}
