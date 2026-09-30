@@ -492,6 +492,61 @@ def test_async_get_json_concurrent_requests_deduplicate() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Coordinator legend classification
+# ---------------------------------------------------------------------------
+
+def test_unrecognized_frame_colour_is_counted_as_failure() -> None:
+    """An unmatched manifest/frame colour must surface via frame_failures."""
+    now = datetime.now(UTC)
+    manifest = _fixture_animation()
+    manifest["map_images"] = [
+        {
+            "pictures": [
+                {
+                    "data_type": "measurement",
+                    "timestamp": (now - timedelta(minutes=5)).timestamp(),
+                    "radar_url": "/measurement.json",
+                },
+                *[
+                    {
+                        "data_type": "forecast",
+                        "timestamp": (now + timedelta(minutes=minutes)).timestamp(),
+                        "radar_url": f"/forecast-{minutes}.json",
+                    }
+                    for minutes in (10, 20, 30)
+                ],
+            ]
+        }
+    ]
+    frame_path = pathlib.Path(__file__).parent / "fixtures" / "frame.json"
+    frame = json.loads(frame_path.read_text(encoding="utf-8"))
+    frame["areas"][0]["color"] = "010101"
+
+    class _Proxy:
+        async def async_get_json(self, tail: str) -> dict:
+            if tail == "product/output/versions.json":
+                return {"precipitation/animation": "test"}
+            if tail.endswith("/animation.json"):
+                return manifest
+            return frame
+
+    hass = MagicMock()
+
+    async def _executor(fn, *args):  # noqa: ANN001
+        return fn(*args)
+
+    hass.async_add_executor_job = _executor
+    coordinator = MeteoSwissRadarNowcastCoordinator(hass, _Proxy(), 0.0, 0.0)
+    coordinator._x_km = 610.3328
+    coordinator._y_km = 160.6157
+
+    result = _run(coordinator._async_update_data())
+
+    assert result.status.value == "unknown"
+    assert coordinator.frame_failures == 4
+
+
+# ---------------------------------------------------------------------------
 # Tests: Staleness conversion
 # ---------------------------------------------------------------------------
 

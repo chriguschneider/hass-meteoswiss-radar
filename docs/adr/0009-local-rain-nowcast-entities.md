@@ -40,6 +40,23 @@ an event is active, keep protection enabled until the current measurement is
 dry and the forecast explicitly covers a continuous 30-minute dry window.
 Missing or stale data must not turn protection off.
 
+Classify frame areas against the precipitation bands in the animation
+manifest's `legend[]`, using the nearest RGB colour with a maximum Euclidean
+distance of 15. The fixture evidence sets that cap: the closest two legend
+colours are 31.0 RGB units apart, so a cap below half that distance (15.5)
+keeps accepted nearest-colour matches unambiguous. The threshold boundary
+between the 0-1 and 1-5 mm/h bands is 32.8 units apart. The documented frame
+colour `9e849a` is 8.8 units from its `#9A7E95` legend colour and therefore
+still matches, while the additional fixture colour `52af2a` is 130.3 units
+from its nearest legend colour and remains unknown.
+
+Treat only bands starting at 1 mm/h or above as wet; the lowest 0-1 mm/h band
+is deliberately excluded because weak echoes are most susceptible to virga,
+ground clutter, and beam shielding. When overlapping areas produce different
+certainty, a classified wet area wins over an unclassifiable area; an
+unclassifiable area in turn prevents a dry all-clear. This gives the precedence
+wet, unknown, dry independently of area order.
+
 Fetch only the warning lead window while dry. Extend the forecast adaptively
 while rain is approaching or active so the integration can estimate event end
 without imposing the long-frame fetch cost on every update.
@@ -53,24 +70,6 @@ point-in-polygon checks run without coordinate conversion on every call.
 swisstopo approximation constants. A change to `FORMAT.md` or to either
 decoder implementation requires updating both implementations and the
 cross-check test in `tests/test_nowcast_core_local.py`.
-
-Precipitation detection is currently an exclusion list: frame colours `333e48`
-(background grey) and `ffffff` (no-data / outside coverage) are treated as
-non-precipitation, and every other colour in `areas[]` counts as wet.
-
-**This is provisional, not a decision to preserve** (#195). It is an exclusion
-list where an allowlist belongs, and `FORMAT.md` documents why that is fragile:
-a frame may carry more areas (observed: 11) than the 9 legend bands, and the
-area colours differ from the legend colours (`9e849a` against legend
-`#9A7E95`). Any colour the list does not name — including a future upstream
-change to the background hex — therefore reads as rain, which would latch the
-rain-protection sensor on. The list also has no intensity threshold: the lowest
-legend band starts at 0 mm/h, so the decision rests on the regime where radar is
-least reliable.
-
-#195 replaces this with an allowlist derived from `legend[]` plus a threshold.
-Until it lands, treat the two hex values above as a description of what the code
-does, not as a mapping that was validated against the legend.
 
 ## Update 2026-09-30 (issue #197): the entities are opt-in
 
@@ -101,6 +100,9 @@ reads as enabled. The first visit to the options dialog persists a real boolean.
   correctly.
 - Local geometry and event logic stay testable without installing Home
   Assistant.
+- The manifest legend, rather than a hardcoded exclusion list, defines which
+  frame colours represent precipitation; unclassifiable colours surface as
+  frame failures and therefore cannot create a false wet or dry result.
 - Conservative unknown handling can keep rain protection active longer than a
   best-effort forecast would, which is intentional for safety-oriented uses.
 - The decoder duplication is guarded by a cross-check test in

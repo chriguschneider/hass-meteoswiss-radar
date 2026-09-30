@@ -81,6 +81,9 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             ) from err
 
         self.manifest_generated_at = _manifest_generated_at(manifest)
+        legend = manifest.get("legend")
+        if not isinstance(legend, list):
+            legend = []
         pictures = _flatten_pictures(manifest)
         if not pictures:
             raise UpdateFailed("MeteoSwiss animation manifest contains no frames")
@@ -106,6 +109,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         measurement, forecast_samples, failures = await self._fetch_local_samples(
             measurement_meta,
             lead_meta,
+            legend,
         )
 
         if (
@@ -132,6 +136,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             _, later_samples, later_failures = await self._fetch_local_samples(
                 None,
                 later_meta,
+                legend,
             )
             failures += later_failures
             forecast_samples.extend(later_samples)
@@ -149,6 +154,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         self,
         measurement_meta: dict[str, Any] | None,
         forecast_meta: list[dict[str, Any]],
+        legend: list[dict[str, Any]],
     ) -> tuple[RainSample | None, list[RainSample], int]:
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_FRAME_FETCHES)
 
@@ -171,6 +177,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
                     frame,
                     self._x_km,
                     self._y_km,
+                    legend,
                 )
                 return RainSample(timestamp=timestamp, wet=wet, source=source)
             except Exception as err:

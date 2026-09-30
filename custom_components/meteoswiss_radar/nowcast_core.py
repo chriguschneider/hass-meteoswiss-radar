@@ -19,7 +19,13 @@ DEFAULT_WARNING_LEAD_MINUTES = 30
 DEFAULT_DRY_WINDOW_MINUTES = 30
 DEFAULT_FORECAST_STEP_MINUTES = 10
 MAX_FORECAST_GAP_MINUTES = 15
-NON_PRECIPITATION_COLORS = {"333e48", "ffffff"}
+# The lowest 0-1 mm/h band is deliberately ignored because weak radar echoes
+# are the regime most affected by virga, ground clutter, and beam shielding.
+DEFAULT_RAIN_THRESHOLD_MM_H = 1.0
+# The closest fixture legend colours are 31 RGB units apart. Keeping the cap
+# below half that gap makes accepted nearest-colour matches unambiguous while
+# still allowing the documented 8.8-unit frame-to-legend drift.
+MAX_LEGEND_COLOR_DISTANCE = 15.0
 # Advection-based nowcasting is only reliable inside this window; beyond it the
 # predicted-dry sensor is suppressed rather than extrapolated.
 PREDICTED_DRY_HORIZON = timedelta(hours=2)
@@ -191,19 +197,75 @@ def frame_covers_grid_point(
         raise ValueError("Malformed MeteoSwiss frame coordinates") from err
 
 
+def _parse_rgb(value: object) -> tuple[int, int, int] | None:
+    """Parse one six-digit RGB colour, with or without a leading hash."""
+    normalized = str(value or "").removeprefix("#")
+    if len(normalized) != 6:
+        return None
+    try:
+        return (
+            int(normalized[0:2], 16),
+            int(normalized[2:4], 16),
+            int(normalized[4:6], 16),
+        )
+    except ValueError:
+        return None
+
+
+def _legend_band_min_for_color(
+    color: object,
+    legend: Sequence[dict[str, Any]],
+) -> float | None:
+    """Return the minimum intensity of the nearest credible legend colour."""
+    area_rgb = _parse_rgb(color)
+    if area_rgb is None:
+        return None
+
+    nearest_distance_squared = float("inf")
+    nearest_minimum: float | None = None
+    for band in legend:
+        if not isinstance(band, dict):
+            continue
+        legend_rgb = _parse_rgb(band.get("color"))
+        try:
+            minimum = float(band["min"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if legend_rgb is None:
+            continue
+
+        distance_squared = sum(
+            (area_channel - legend_channel) ** 2
+            for area_channel, legend_channel in zip(
+                area_rgb,
+                legend_rgb,
+                strict=True,
+            )
+        )
+        if distance_squared < nearest_distance_squared:
+            nearest_distance_squared = distance_squared
+            nearest_minimum = minimum
+
+    if nearest_distance_squared > MAX_LEGEND_COLOR_DISTANCE**2:
+        return None
+    return nearest_minimum
+
+
 def frame_is_wet_at_grid_point(
-    frame: dict[str, Any], x_km: float, y_km: float
+    frame: dict[str, Any],
+    x_km: float,
+    y_km: float,
+    legend: Sequence[dict[str, Any]],
+    rain_threshold_mm_h: float = DEFAULT_RAIN_THRESHOLD_MM_H,
 ) -> bool | None:
-    """Return rain at a covered point, or None outside the radar grid."""
+    """Return rain at a point, or None outside coverage or for unknown colour."""
 
     if not frame_covers_grid_point(frame, x_km, y_km):
         return None
 
     coords = frame["coords"]
+    classification: bool | None = False
     for area in frame.get("areas") or []:
-        color = str(area.get("color") or "").lstrip("#").lower()
-        if color in NON_PRECIPITATION_COLORS:
-            continue
         for shape in area.get("shapes") or []:
             if not shape:
                 continue
@@ -215,8 +277,15 @@ def frame_is_wet_at_grid_point(
                 for hole in shape[1:]
             )
             if not in_hole:
-                return True
-    return False
+                minimum = _legend_band_min_for_color(area.get("color"), legend)
+                if minimum is not None and minimum >= rain_threshold_mm_h:
+                    # A confidently wet band wins over overlapping unknown
+                    # areas; never let uncertainty create a false all-clear.
+                    return True
+                if minimum is None:
+                    classification = None
+                break
+    return classification
 
 
 def _round_lead_minutes(delta: timedelta) -> int:
