@@ -177,21 +177,29 @@ def _point_in_ring(px: float, py: float, ring: Sequence[tuple[float, float]]) ->
     return inside
 
 
-def frame_is_wet_at_grid_point(
+def frame_covers_grid_point(
     frame: dict[str, Any], x_km: float, y_km: float
 ) -> bool:
-    """Return whether a MeteoSwiss radar/INCA rate frame contains rain at point."""
-
+    """Return whether a grid point is covered by a MeteoSwiss frame."""
     coords = frame.get("coords") or {}
     try:
-        if not (
+        return (
             float(coords["x_min"]) <= x_km <= float(coords["x_max"])
             and float(coords["y_min"]) <= y_km <= float(coords["y_max"])
-        ):
-            return False
+        )
     except (KeyError, TypeError, ValueError) as err:
         raise ValueError("Malformed MeteoSwiss frame coordinates") from err
 
+
+def frame_is_wet_at_grid_point(
+    frame: dict[str, Any], x_km: float, y_km: float
+) -> bool | None:
+    """Return rain at a covered point, or None outside the radar grid."""
+
+    if not frame_covers_grid_point(frame, x_km, y_km):
+        return None
+
+    coords = frame["coords"]
     for area in frame.get("areas") or []:
         color = str(area.get("color") or "").lstrip("#").lower()
         if color in NON_PRECIPITATION_COLORS:

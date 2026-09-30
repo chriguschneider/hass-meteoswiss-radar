@@ -243,7 +243,35 @@ def test_real_fixture_geometry_contains_known_point() -> None:
     )
 
     assert core.frame_is_wet_at_grid_point(fixture, 610.3328, 160.6157)
-    assert not core.frame_is_wet_at_grid_point(fixture, 800.0, 400.0)
+    assert core.frame_is_wet_at_grid_point(fixture, 800.0, 400.0) is False
+    assert core.frame_is_wet_at_grid_point(fixture, 1000.0, 500.0) is None
+
+
+def test_out_of_grid_propagates_to_unknown_status() -> None:
+    fixture = json.loads(
+        (ROOT / "tests" / "fixtures" / "frame.json").read_text(encoding="utf-8")
+    )
+    wet = core.frame_is_wet_at_grid_point(fixture, 1000.0, 500.0)
+
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(wet),
+        forecast_samples=forecast([wet] * 4),
+    )
+
+    assert result.status == core.RainStatus.UNKNOWN
+    assert result.protection_active is None
+
+
+def test_malformed_grid_coordinates_raise_value_error() -> None:
+    malformed = {"coords": {"x_min": 0}, "areas": []}
+
+    try:
+        core.frame_is_wet_at_grid_point(malformed, 1.0, 1.0)
+    except ValueError as err:
+        assert str(err) == "Malformed MeteoSwiss frame coordinates"
+    else:
+        raise AssertionError("Malformed coordinates should raise ValueError")
 
 
 def test_non_precipitation_color_does_not_count_as_rain() -> None:

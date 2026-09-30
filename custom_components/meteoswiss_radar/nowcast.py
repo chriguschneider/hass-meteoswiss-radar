@@ -18,6 +18,7 @@ from .nowcast_core import (
     RainSample,
     RainStatus,
     evaluate_nowcast,
+    frame_covers_grid_point,
     frame_is_wet_at_grid_point,
     wgs84_to_grid_km,
 )
@@ -54,8 +55,10 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         self._x_km, self._y_km = wgs84_to_grid_km(latitude, longitude)
         self.manifest_generated_at: datetime | None = None
         self.frame_failures = 0
+        self.location_in_radar_coverage: bool | None = None
 
     async def _async_update_data(self) -> RainNowcast:
+        self.location_in_radar_coverage = None
         now = datetime.now(UTC)
         try:
             versions = await self._proxy.async_get_json(
@@ -158,6 +161,11 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             try:
                 async with semaphore:
                     frame = await self._proxy.async_get_json(radar_url)
+                if not frame_covers_grid_point(frame, self._x_km, self._y_km):
+                    if self.location_in_radar_coverage is None:
+                        self.location_in_radar_coverage = False
+                    return RainSample(timestamp=timestamp, wet=None, source=source)
+                self.location_in_radar_coverage = True
                 wet = await self.hass.async_add_executor_job(
                     frame_is_wet_at_grid_point,
                     frame,
