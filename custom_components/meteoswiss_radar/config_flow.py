@@ -59,13 +59,21 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
         # sibling constants only.
         from . import nowcast_entities_enabled
 
+        # Resolve the entry from the flow handler rather than `self.config_entry`:
+        # the plain `OptionsFlow.config_entry` property only exists from HA
+        # 2024.12, but the manifest supports 2024.7.0, where reading it would
+        # raise AttributeError and the options dialog would fail to open. The
+        # handler is the entry id on every supported version, and looking it up
+        # here also avoids the deprecated explicit `self.config_entry = ...`.
+        entry = self.hass.config_entries.async_get_entry(self.handler)
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
                         OPT_NOWCAST_ENABLED,
-                        default=nowcast_entities_enabled(self.hass, self.config_entry),
+                        default=nowcast_entities_enabled(self.hass, entry),
                     ): bool,
                 }
             ),

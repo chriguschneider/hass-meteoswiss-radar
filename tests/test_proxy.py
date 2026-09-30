@@ -199,6 +199,9 @@ from custom_components.meteoswiss_radar import (  # noqa: E402
     async_unload_entry,
 )
 import custom_components.meteoswiss_radar as _integration  # noqa: E402
+from custom_components.meteoswiss_radar.config_flow import (  # noqa: E402
+    MeteoSwissRadarOptionsFlow,
+)
 
 # Shorthand used in every test.
 _VERSIONS_TAIL = "product/output/versions.json"
@@ -1640,3 +1643,33 @@ def test_setup_registers_one_options_update_listener(
     # A second setup without an unload short-circuits, so no second listener.
     _setup_and_record(hass, entry, monkeypatch)
     assert entry.add_update_listener.call_count == 1
+
+
+def test_options_flow_resolves_entry_via_handler() -> None:
+    """The options form must resolve the entry from `self.handler`, not
+    `self.config_entry`.
+
+    `OptionsFlow.config_entry` only exists from HA 2024.12, but the manifest
+    supports 2024.7.0. On the older floor, reading `self.config_entry` raises
+    AttributeError and the options dialog fails to open. The empty `OptionsFlow`
+    stub reproduces that floor: it has no `config_entry`, so a step that reached
+    for it would raise here too.
+    """
+    _registry_stub().entries = []
+    entry = _entry_with_options({"nowcast_enabled": True})
+
+    flow = MeteoSwissRadarOptionsFlow()
+    flow.handler = entry.entry_id
+    flow.hass = MagicMock()
+    flow.hass.config_entries.async_get_entry = MagicMock(return_value=entry)
+    flow.async_show_form = lambda **kwargs: kwargs
+
+    result = _run(flow.async_step_init())
+
+    flow.hass.config_entries.async_get_entry.assert_called_once_with(entry.entry_id)
+    assert result["step_id"] == "init"
+    # The Required marker carries the default the dialog will preselect; the
+    # explicit True option resolves without touching the registry fallback.
+    (marker,) = list(result["data_schema"])
+    assert marker.key == "nowcast_enabled"
+    assert marker.default is True
