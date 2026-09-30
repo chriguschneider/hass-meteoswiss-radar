@@ -60,6 +60,25 @@ coverage) are treated as non-precipitation. All other colours in the
 mapping matches the MeteoSwiss RZC/INCA legend and was confirmed by
 inspection of live frames during the initial implementation review.
 
+## Update 2026-09-30 (issue #197): the entities are opt-in
+
+The decision above created the entities for every config entry. That made a
+card-only install grow five entities, a device and a 5-minute coordinator
+unasked, which contradicts the reasoning the sibling weather integration records
+in its ADR-0003 for keeping the two apart: *"users who want only the map should
+not get a weather entity, and vice versa."* Read symmetrically, the same applies
+here.
+
+An options toggle (`nowcast_enabled`, default off) now gates the platforms, with
+an update listener reloading the entry so the entities appear or disappear
+without a restart.
+
+Entries created before the option keep their entities: instead of writing a
+migrated value during setup — which would trip the update listener and reload
+the entry mid-setup — the absence of an explicit choice is resolved from the
+entity registry on each setup, and an entry that already owns nowcast entities
+reads as enabled. The first visit to the options dialog persists a real boolean.
+
 ## Consequences
 
 - Automations can consume the same radar data as the card through stable Home

@@ -1,19 +1,33 @@
 # Local rain nowcast
 
-MeteoSwiss Radar exposes local rain-nowcast entities derived from the same
+MeteoSwiss Radar can expose local rain-nowcast entities derived from the same
 MeteoSwiss RZC / INCA animation data that powers the Lovelace card.
 
 The integration evaluates radar contours at the Home Assistant home location
 and reuses the existing authenticated, allowlisted, cache-aware proxy. It does
 not add a second upstream API path.
 
+## Enabling it
+
+The entities are **off by default** — installing the integration for the card
+alone should not add entities or a polling coordinator. Turn them on under
+**Settings → Devices & services → MeteoSwiss Radar → Configure**, with
+*Local rain-nowcast entities*.
+
+Flipping the toggle reloads the config entry, so the entities appear or
+disappear without restarting Home Assistant. While enabled the integration polls
+MeteoSwiss every 5 minutes.
+
+If you already had these entities before the toggle existed, they stay enabled
+on upgrade — an existing rain-protection automation keeps working.
+
 ## Entities
 
-- `sensor.meteoswiss_radar_regen_nowcast_status` reports `dry`,
+- `sensor.meteoswiss_radar_rain_nowcast_status` reports `dry`,
   `approaching`, `active`, or `unknown`.
-- `sensor.meteoswiss_radar_regen_in` reports the approximate lead time in
+- `sensor.meteoswiss_radar_rain_in` reports the approximate lead time in
   minutes while rain is approaching.
-- `sensor.meteoswiss_radar_regenbeginn` reports the predicted event start.
+- `sensor.meteoswiss_radar_rain_start` reports the predicted event start.
 - `sensor.meteoswiss_radar_expected_dry_from` (displayed as "Expected dry again
   from" / "Voraussichtlich trocken ab" / "Sec à nouveau prévu à partir de" /
   "Di nuovo asciutto previsto da") estimates when conditions are expected to be
@@ -23,11 +37,12 @@ not add a second upstream API path.
   window is confirmed within 2 hours the sensor becomes `unknown` and
   `event_end_open` remains `True`. This is a display estimate, not the basis for
   the rain-protection automation signal.
-- `binary_sensor.meteoswiss_radar_regenschutz` is intended for automations that
+- `binary_sensor.meteoswiss_radar_rain_protection` is intended for automations that
   need a conservative rain-protection signal.
 
-Entity names are translated by Home Assistant; exact entity IDs can therefore
-depend on the selected language and existing entity registry entries.
+The IDs above are the English defaults. Entity names are translated by Home
+Assistant, so the actual IDs depend on the language active when the entities
+were first created and on what the entity registry already held.
 
 ## Event behaviour
 
