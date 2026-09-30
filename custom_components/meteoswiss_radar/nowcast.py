@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(minutes=5)
-FORECAST_HORIZON = timedelta(hours=6)
+FORECAST_HORIZON = timedelta(hours=2)
 FORECAST_PADDING = timedelta(minutes=DEFAULT_DRY_WINDOW_MINUTES)
 MEASUREMENT_MAX_AGE = timedelta(minutes=15)
 MAX_CONCURRENT_FRAME_FETCHES = 6
@@ -53,8 +52,6 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         )
         self._proxy = proxy
         self._x_km, self._y_km = wgs84_to_grid_km(latitude, longitude)
-        self._earlier_end_candidate: datetime | None = None
-        self._earlier_end_confirmations = 0
         self.manifest_generated_at: datetime | None = None
         self.frame_failures = 0
 
@@ -143,7 +140,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             )
 
         self.frame_failures = failures
-        return self._stabilize_earlier_end(raw)
+        return raw
 
     async def _fetch_local_samples(
         self,
@@ -191,45 +188,6 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             measurement = samples[0]
             offset = 1
         return measurement, samples[offset:], failures
-
-    def _stabilize_earlier_end(self, data: RainNowcast) -> RainNowcast:
-        """Require two updates before moving an active event's end earlier.
-
-        Extensions are accepted immediately.  The rule only smooths the displayed
-        predicted end while an event is active/approaching; it never delays the
-        actual end once a 30-minute dry window from *now* has been confirmed.
-        """
-
-        previous = self.data
-        if (
-            previous is None
-            or data.status not in (RainStatus.ACTIVE, RainStatus.APPROACHING)
-            or previous.status not in (RainStatus.ACTIVE, RainStatus.APPROACHING)
-            or data.event_end is None
-            or previous.event_end is None
-            or data.event_end >= previous.event_end
-        ):
-            self._earlier_end_candidate = None
-            self._earlier_end_confirmations = 0
-            return data
-
-        if self._earlier_end_candidate == data.event_end:
-            self._earlier_end_confirmations += 1
-        else:
-            self._earlier_end_candidate = data.event_end
-            self._earlier_end_confirmations = 1
-
-        if self._earlier_end_confirmations >= 2:
-            self._earlier_end_candidate = None
-            self._earlier_end_confirmations = 0
-            return data
-
-        return replace(
-            data,
-            event_end=previous.event_end,
-            event_end_open=previous.event_end_open,
-        )
-
 
 def _flatten_pictures(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     pictures: list[dict[str, Any]] = []

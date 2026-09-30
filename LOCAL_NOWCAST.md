@@ -14,8 +14,15 @@ not add a second upstream API path.
 - `sensor.meteoswiss_radar_regen_in` reports the approximate lead time in
   minutes while rain is approaching.
 - `sensor.meteoswiss_radar_regenbeginn` reports the predicted event start.
-- `sensor.meteoswiss_radar_regenende` reports the predicted event end when a
-  sufficiently long dry window is visible in the forecast.
+- `sensor.meteoswiss_radar_expected_dry_from` (displayed as "Expected dry again
+  from" / "Voraussichtlich trocken ab" / "Sec à nouveau prévu à partir de" /
+  "Di nuovo asciutto previsto da") estimates when conditions are expected to be
+  dry again. It reports the start of the first 30-minute dry window found in the
+  forecast. Because INCA advection-based nowcasting is only reliable within
+  roughly 2 hours, the sensor is suppressed beyond that horizon: once no dry
+  window is confirmed within 2 hours the sensor becomes `unknown` and
+  `event_end_open` remains `True`. This is a display estimate, not the basis for
+  the rain-protection automation signal.
 - `binary_sensor.meteoswiss_radar_regenschutz` is intended for automations that
   need a conservative rain-protection signal.
 
@@ -31,13 +38,10 @@ Once an event has started, short dry gaps remain part of the same event. The
 event is only cleared when the current measurement is dry and the forecast
 confirms a continuous 30-minute dry window from the current time.
 
-On a dry day the coordinator only fetches the short lead window. When rain is
-approaching or active, it extends the forecast fetch adaptively to six hours
-plus the dry-window padding so it can estimate an event end.
-
-Predicted event ends that move later are accepted immediately. An earlier
-predicted end must be observed on two consecutive coordinator updates before
-the displayed end moves earlier.
+On a dry day the coordinator only fetches the short lead window (~3 frames).
+When rain is approaching or active, it extends the forecast fetch adaptively to
+two hours plus the dry-window padding so it can estimate when conditions are
+expected to be dry again.
 
 ## Missing data
 

@@ -15,7 +15,7 @@
       "nowcast_status": {"name": "Rain nowcast status"},
       "rain_in": {"name": "Rain in"},
       "rain_start": {"name": "Rain start"},
-      "rain_end": {"name": "Rain end"}
+      "expected_dry_from": {"name": "Expected dry again from"}
     },
     "binary_sensor": {
       "rain_protection": {"name": "Rain protection"}
