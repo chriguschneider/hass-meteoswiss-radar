@@ -14,7 +14,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import ModuleType
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -82,6 +82,10 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha = ModuleType("homeassistant")
     ha_core = ModuleType("homeassistant.core")
     ha_core.HomeAssistant = object  # type: ignore[attr-defined]
+    # Identity stand-in for homeassistant.core.callback.  The entity modules
+    # (sensor.py) import it, so this stub must carry it even when test_nowcast
+    # wins the sys.modules.setdefault race over the entity test files.
+    ha_core.callback = lambda func: func  # type: ignore[attr-defined]
     ha_comp = ModuleType("homeassistant.components")
     ha_http = ModuleType("homeassistant.components.http")
 
@@ -118,8 +122,26 @@ def _make_stubs() -> dict[str, ModuleType]:
         def __class_getitem__(cls, item):  # noqa: ANN003
             return cls
 
+    # CoordinatorEntity is only used by the entity modules (sensor.py /
+    # binary_sensor.py).  Carry it here too so this stub stays complete when
+    # test_nowcast wins the sys.modules.setdefault race over the entity tests.
+    class _CoordinatorEntity:
+        def __init__(self, coordinator) -> None:  # noqa: ANN001
+            super().__init__()
+            self.coordinator = coordinator
+
+        def __class_getitem__(cls, item):  # noqa: ANN003
+            return cls
+
+        def async_write_ha_state(self) -> None:
+            pass
+
+        def _handle_coordinator_update(self) -> None:
+            self.async_write_ha_state()
+
     ha_update.UpdateFailed = _UpdateFailed  # type: ignore[attr-defined]
     ha_update.DataUpdateCoordinator = _DataUpdateCoordinator  # type: ignore[attr-defined]
+    ha_update.CoordinatorEntity = _CoordinatorEntity  # type: ignore[attr-defined]
 
     ha_helpers = ModuleType("homeassistant.helpers")
     ha_client = ModuleType("homeassistant.helpers.aiohttp_client")
@@ -147,11 +169,13 @@ for _name, _mod in _STUBS.items():
 from custom_components.meteoswiss_radar import MeteoSwissRadarProxyView  # noqa: E402
 from custom_components.meteoswiss_radar.nowcast import (  # noqa: E402
     MEASUREMENT_MAX_AGE,
+    MeteoSwissRadarNowcastCoordinator,
     _flatten_pictures,
     _forecast_frames,
     _latest_measurement,
     _manifest_generated_at,
 )
+from custom_components.meteoswiss_radar.nowcast_core import RainNowcast, RainStatus  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -520,3 +544,211 @@ def test_measurement_freshness_keeps_wet_status() -> None:
 def test_measurement_max_age_constant() -> None:
     """MEASUREMENT_MAX_AGE must be 15 minutes."""
     assert MEASUREMENT_MAX_AGE == timedelta(minutes=15)
+
+
+# ---------------------------------------------------------------------------
+# Tests: MeteoSwissRadarNowcastCoordinator._async_update_data
+# ---------------------------------------------------------------------------
+
+_UpdateFailed = sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed
+
+
+def _coordinator(proxy: MagicMock | None = None) -> MeteoSwissRadarNowcastCoordinator:
+    """Build a coordinator wired to a mock proxy and a synchronous executor."""
+    hass = MagicMock()
+
+    async def _executor(fn, *args):  # noqa: ANN001
+        return fn(*args)
+
+    hass.async_add_executor_job = _executor
+    if proxy is None:
+        proxy = MagicMock()
+    return MeteoSwissRadarNowcastCoordinator(hass, proxy, 46.95, 7.44)
+
+
+def _now_ts() -> float:
+    return datetime.now(UTC).timestamp()
+
+
+def _minimal_manifest(base_ts: float) -> dict:
+    """Animation manifest with one measurement and two forecast frames."""
+    return {
+        "config": {"timestamp": base_ts - 600},
+        "map_images": [
+            {
+                "pictures": [
+                    {
+                        "data_type": "measurement",
+                        "timestamp": base_ts - 300,
+                        "radar_url": "product/output/radar/rzc/m.json",
+                    },
+                    {
+                        "data_type": "forecast",
+                        "timestamp": base_ts + 600,
+                        "radar_url": "product/output/inca/precipitation/rate/f1.json",
+                    },
+                    {
+                        "data_type": "forecast",
+                        "timestamp": base_ts + 1200,
+                        "radar_url": "product/output/inca/precipitation/rate/f2.json",
+                    },
+                ]
+            }
+        ],
+    }
+
+
+# Coords that don't cover the Swiss test location (46.95°N, 7.44°E ≈ x=601, y=198 km).
+_OUT_OF_RANGE_FRAME = {
+    "coords": {"x_min": 0.0, "x_max": 100.0, "y_min": 0.0, "y_max": 100.0}
+}
+
+
+def test_async_update_data_happy_path_returns_rain_nowcast() -> None:
+    base = _now_ts()
+    manifest = _minimal_manifest(base)
+
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=[
+            {"precipitation/animation": "20240101_1200"},  # versions.json
+            manifest,                                        # animation.json
+            _OUT_OF_RANGE_FRAME,                           # measurement frame
+            _OUT_OF_RANGE_FRAME,                           # forecast frame 1
+            _OUT_OF_RANGE_FRAME,                           # forecast frame 2
+        ]
+    )
+
+    result = _run(_coordinator(proxy)._async_update_data())
+    assert isinstance(result, RainNowcast)
+
+
+def test_async_update_data_stores_manifest_generated_at() -> None:
+    base = _now_ts()
+    manifest = _minimal_manifest(base)
+
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=[
+            {"precipitation/animation": "20240101_1200"},
+            manifest,
+            _OUT_OF_RANGE_FRAME,
+            _OUT_OF_RANGE_FRAME,
+            _OUT_OF_RANGE_FRAME,
+        ]
+    )
+
+    coord = _coordinator(proxy)
+    _run(coord._async_update_data())
+    assert coord.manifest_generated_at is not None
+
+
+def test_async_update_data_raises_on_missing_animation_version() -> None:
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(return_value={})  # no precipitation/animation key
+
+    with pytest.raises(_UpdateFailed, match="version is missing"):
+        _run(_coordinator(proxy)._async_update_data())
+
+
+def test_async_update_data_raises_on_empty_manifest() -> None:
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=[
+            {"precipitation/animation": "20240101_1200"},
+            {"map_images": []},
+        ]
+    )
+
+    with pytest.raises(_UpdateFailed, match="no frames"):
+        _run(_coordinator(proxy)._async_update_data())
+
+
+def test_async_update_data_wraps_network_error_as_update_failed() -> None:
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+    with pytest.raises(_UpdateFailed, match="Unable to fetch"):
+        _run(_coordinator(proxy)._async_update_data())
+
+
+def test_async_update_data_reraises_update_failed_unchanged() -> None:
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=_UpdateFailed("explicit upstream error")
+    )
+
+    with pytest.raises(_UpdateFailed, match="explicit upstream error"):
+        _run(_coordinator(proxy)._async_update_data())
+
+
+def test_async_update_data_adaptive_second_pass_reruns_evaluate() -> None:
+    """When the first pass returns ACTIVE and later_meta is non-empty, evaluate_nowcast
+    is called a second time after fetching the extended forecast window."""
+    import custom_components.meteoswiss_radar.nowcast as _nowcast_mod
+
+    base = _now_ts()
+    manifest = {
+        "config": {"timestamp": base},
+        "map_images": [
+            {
+                "pictures": [
+                    {
+                        "data_type": "measurement",
+                        "timestamp": base - 300,
+                        "radar_url": "product/output/radar/rzc/m.json",
+                    },
+                    {
+                        "data_type": "forecast",
+                        "timestamp": base + 600,  # inside 30-min lead window
+                        "radar_url": "product/output/inca/precipitation/rate/f1.json",
+                    },
+                    {
+                        "data_type": "forecast",
+                        "timestamp": base + 3600,  # beyond lead window → later_meta
+                        "radar_url": "product/output/inca/precipitation/rate/f2.json",
+                    },
+                ]
+            }
+        ],
+    }
+
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=[
+            {"precipitation/animation": "20240101_1200"},
+            manifest,
+            _OUT_OF_RANGE_FRAME,  # measurement frame
+            _OUT_OF_RANGE_FRAME,  # f1 (lead)
+            _OUT_OF_RANGE_FRAME,  # f2 (later — fetched in adaptive pass)
+        ]
+    )
+
+    active_nowcast = RainNowcast(
+        status=RainStatus.ACTIVE,
+        protection_active=True,
+        currently_wet=True,
+        event_start=None,
+        event_end=None,
+        event_end_open=False,
+        lead_time_minutes=None,
+        forecast_horizon_end=None,
+        measurement_time=None,
+        dry_window_minutes=30,
+        warning_lead_minutes=30,
+    )
+
+    evaluate_calls: list = []
+
+    def _fake_evaluate(now, measurement, forecast_samples, previous):  # noqa: ANN001
+        evaluate_calls.append(1)
+        return active_nowcast
+
+    with patch.object(_nowcast_mod, "evaluate_nowcast", _fake_evaluate):
+        result = _run(_coordinator(proxy)._async_update_data())
+
+    # evaluate_nowcast called twice: once for lead window, once after adaptive pass
+    assert len(evaluate_calls) == 2
+    # All five async_get_json calls were made (versions + manifest + 3 frames)
+    assert proxy.async_get_json.call_count == 5
+    assert result.status == RainStatus.ACTIVE
