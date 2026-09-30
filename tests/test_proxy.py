@@ -102,6 +102,10 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha_cfg.ConfigFlowResult = dict  # type: ignore[attr-defined]
     ha_core = ModuleType("homeassistant.core")
     ha_core.HomeAssistant = object  # type: ignore[attr-defined]
+    # Identity stand-in for homeassistant.core.callback.  The entity modules
+    # (sensor.py) import it, so this stub must carry it even when test_proxy
+    # wins the sys.modules.setdefault race over the entity test files.
+    ha_core.callback = lambda func: func  # type: ignore[attr-defined]
     ha_helpers = ModuleType("homeassistant.helpers")
     ha_client = ModuleType("homeassistant.helpers.aiohttp_client")
     ha_client.async_get_clientsession = MagicMock()  # type: ignore[attr-defined]

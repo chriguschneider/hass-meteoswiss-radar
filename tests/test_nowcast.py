@@ -82,6 +82,10 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha = ModuleType("homeassistant")
     ha_core = ModuleType("homeassistant.core")
     ha_core.HomeAssistant = object  # type: ignore[attr-defined]
+    # Identity stand-in for homeassistant.core.callback.  The entity modules
+    # (sensor.py) import it, so this stub must carry it even when test_nowcast
+    # wins the sys.modules.setdefault race over the entity test files.
+    ha_core.callback = lambda func: func  # type: ignore[attr-defined]
     ha_comp = ModuleType("homeassistant.components")
     ha_http = ModuleType("homeassistant.components.http")
 
@@ -118,8 +122,26 @@ def _make_stubs() -> dict[str, ModuleType]:
         def __class_getitem__(cls, item):  # noqa: ANN003
             return cls
 
+    # CoordinatorEntity is only used by the entity modules (sensor.py /
+    # binary_sensor.py).  Carry it here too so this stub stays complete when
+    # test_nowcast wins the sys.modules.setdefault race over the entity tests.
+    class _CoordinatorEntity:
+        def __init__(self, coordinator) -> None:  # noqa: ANN001
+            super().__init__()
+            self.coordinator = coordinator
+
+        def __class_getitem__(cls, item):  # noqa: ANN003
+            return cls
+
+        def async_write_ha_state(self) -> None:
+            pass
+
+        def _handle_coordinator_update(self) -> None:
+            self.async_write_ha_state()
+
     ha_update.UpdateFailed = _UpdateFailed  # type: ignore[attr-defined]
     ha_update.DataUpdateCoordinator = _DataUpdateCoordinator  # type: ignore[attr-defined]
+    ha_update.CoordinatorEntity = _CoordinatorEntity  # type: ignore[attr-defined]
 
     ha_helpers = ModuleType("homeassistant.helpers")
     ha_client = ModuleType("homeassistant.helpers.aiohttp_client")
