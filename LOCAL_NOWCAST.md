@@ -80,7 +80,9 @@ the entities were first created.
 ## Event behaviour
 
 Rain protection starts when precipitation is measured at the Home Assistant
-location or forecast within 30 minutes.
+location or forecast within 30 minutes. The integration classifies frame
+colours against the current MeteoSwiss legend and uses 1 mm/h as the rain
+threshold, ignoring the least reliable 0-1 mm/h band.
 
 Once an event has started, short dry gaps remain part of the same event. The
 event is only cleared when the current measurement is dry and the forecast
@@ -115,9 +117,13 @@ until when.
 ## Missing data
 
 Missing or stale current radar data never produces a false all-clear. If the
-current state or the short forecast window cannot be established reliably, the
-nowcast becomes `unknown`; an already active event remains protected until a
-valid dry window is confirmed.
+current state, a frame colour, or the short forecast window cannot be
+established reliably, the nowcast becomes `unknown`; an already active event
+remains protected until a valid dry window is confirmed.
+
+For safety automations, treat only an explicit `off` as an all-clear. React to
+`on` immediately, and handle a persistent `unknown` or `unavailable` state as a
+separate fail-safe condition rather than assuming that it means dry weather.
 
 ## Architecture
 
