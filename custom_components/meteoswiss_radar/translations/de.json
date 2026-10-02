@@ -15,10 +15,12 @@
       "init": {
         "title": "MeteoSwiss Radar Optionen",
         "data": {
-          "nowcast_enabled": "Lokale Regen-Nowcast-Entitäten"
+          "nowcast_enabled": "Lokale Regen-Nowcast-Entitäten",
+          "protection_min_hold_minutes": "Mindesthaltezeit des Regenschutzes (Minuten)"
         },
         "data_description": {
-          "nowcast_enabled": "Wertet das Radar am Standort von Home Assistant aus und ergänzt Regen-Nowcast-Sensoren sowie einen binären Regenschutz-Sensor für Automationen. Ruft MeteoSwiss alle 5 Minuten ab, solange aktiviert; deaktiviert lassen, wenn nur die Karte gewünscht ist."
+          "nowcast_enabled": "Wertet das Radar am Standort von Home Assistant aus und ergänzt Regen-Nowcast-Sensoren sowie einen binären Regenschutz-Sensor für Automationen. Ruft MeteoSwiss alle 5 Minuten ab, solange aktiviert; deaktiviert lassen, wenn nur die Karte gewünscht ist.",
+          "protection_min_hold_minutes": "Sobald der Regenschutz anspringt, bleibt er mindestens so lange an, auch wenn das Radar früher Entwarnung gibt. Verhindert, dass ein durchziehender Schauer den angeschlossenen Antrieb — meist einen Markisenmotor — hin und her fahren lässt. 0 schaltet die Haltezeit ab."
         }
       }
     }

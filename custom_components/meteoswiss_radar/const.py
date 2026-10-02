@@ -10,6 +10,11 @@ DATA_NOWCAST = f"{DOMAIN}_nowcast_data"
 # weather entity, and vice versa").
 OPT_NOWCAST_ENABLED = "nowcast_enabled"
 
+# Minimum minutes the rain-protection signal stays on once raised (#212).
+# Whatever it drives is usually a motor, and a shower clipping the location
+# otherwise cycles it within minutes.
+OPT_PROTECTION_MIN_HOLD = "protection_min_hold_minutes"
+
 # Keep in sync with manifest.json and the card's CARD_VERSION.
 VERSION = "0.15.0"
 

@@ -13,7 +13,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 
-from .const import DOMAIN, OPT_NOWCAST_ENABLED
+from .const import DOMAIN, OPT_NOWCAST_ENABLED, OPT_PROTECTION_MIN_HOLD
 
 
 class MeteoSwissRadarConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -57,7 +57,7 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
         # Import here, not at module level: config_flow is imported by HA during
         # discovery, before __init__ has run, and __init__ imports this module's
         # sibling constants only.
-        from . import nowcast_entities_enabled
+        from . import nowcast_entities_enabled, protection_min_hold_minutes
 
         # Resolve the entry from the flow handler rather than `self.config_entry`:
         # the plain `OptionsFlow.config_entry` property only exists from HA
@@ -75,6 +75,10 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
                         OPT_NOWCAST_ENABLED,
                         default=nowcast_entities_enabled(self.hass, entry),
                     ): bool,
+                    vol.Required(
+                        OPT_PROTECTION_MIN_HOLD,
+                        default=protection_min_hold_minutes(entry),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
                 }
             ),
         )

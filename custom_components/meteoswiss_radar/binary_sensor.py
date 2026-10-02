@@ -67,6 +67,13 @@ class MeteoSwissRadarRainProtectionBinarySensor(
             "event_end_open": data.event_end_open,
             "warning_lead_minutes": data.warning_lead_minutes,
             "dry_window_minutes": data.dry_window_minutes,
+            # Set only while the minimum hold is what keeps this sensor on --
+            # so "on although the status says dry" has a visible reason.
+            "protection_hold_until": (
+                data.protection_hold_until.isoformat()
+                if data.protection_hold_until
+                else None
+            ),
         }
 
     @callback
