@@ -26,7 +26,13 @@
   "entity": {
     "sensor": {
       "nowcast_status": {
-        "name": "Rain nowcast status"
+        "name": "Rain nowcast status",
+        "state": {
+          "dry": "Dry",
+          "approaching": "Rain approaching",
+          "active": "Raining",
+          "unknown": "No data"
+        }
       },
       "rain_in": {
         "name": "Rain in"

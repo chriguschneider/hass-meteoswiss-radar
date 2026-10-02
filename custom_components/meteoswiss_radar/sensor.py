@@ -9,7 +9,6 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
-    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
@@ -19,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DATA_NOWCAST, DOMAIN
 from .nowcast import MeteoSwissRadarNowcastCoordinator
+from .nowcast_core import RainStatus
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -33,6 +33,12 @@ SENSORS: Final = (
         key="nowcast_status",
         translation_key="nowcast_status",
         icon="mdi:weather-rainy",
+        # ENUM is what makes the frontend translate the value: without it the
+        # sensor shows the raw `dry`/`approaching`/... slug in every language,
+        # while the three sibling sensors can only ever say "unknown" when no
+        # event exists. This is the one entity that carries the sentence.
+        device_class=SensorDeviceClass.ENUM,
+        options=[status.value for status in RainStatus],
         value="status",
     ),
     MeteoSwissRadarNowcastSensorDescription(
@@ -40,7 +46,9 @@ SENSORS: Final = (
         translation_key="rain_in",
         icon="mdi:timer-sand",
         device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.MEASUREMENT,
+        # No state_class on purpose: this is a countdown that is `unknown`
+        # whenever rain is not approaching, so long-term statistics over it
+        # record gaps rather than a trend.
         native_unit_of_measurement=UnitOfTime.MINUTES,
         value="lead_time_minutes",
     ),

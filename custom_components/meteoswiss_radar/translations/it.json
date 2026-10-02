@@ -26,7 +26,13 @@
   "entity": {
     "sensor": {
       "nowcast_status": {
-        "name": "Stato nowcasting pioggia"
+        "name": "Stato nowcasting pioggia",
+        "state": {
+          "dry": "Asciutto",
+          "approaching": "Pioggia in arrivo",
+          "active": "Sta piovendo",
+          "unknown": "Nessun dato"
+        }
       },
       "rain_in": {
         "name": "Pioggia tra"
