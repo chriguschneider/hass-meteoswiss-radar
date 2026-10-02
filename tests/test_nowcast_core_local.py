@@ -636,3 +636,102 @@ def test_background_colours_are_rejected_wherever_they_sit() -> None:
     for index in range(len(bands) + 2):
         for colour in _BACKGROUND_COLOURS:
             assert core._legend_band_min_for_area(colour, index, bands) is None
+# Tests: layered "next rain" — radar near, hourly model far (ADR-0010)
+# ---------------------------------------------------------------------------
+
+def _hours(*specs: tuple[int, float | None, float | None]) -> list[core.ForecastHour]:
+    """Forecast hours as (offset in hours from NOW, mm, probability)."""
+    return [
+        core.ForecastHour(
+            start=NOW + timedelta(hours=offset),
+            precipitation_mm=mm,
+            probability_percent=prob,
+        )
+        for offset, mm, prob in specs
+    ]
+
+
+def _dry_result() -> core.RainNowcast:
+    return core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False] * 6),
+    )
+
+
+def test_forecast_answers_when_the_radar_sees_nothing() -> None:
+    """The case that motivated this: radar dry, model has rain in four hours.
+
+    Taken from a real afternoon — radar reported `dry` with a 30-minute horizon
+    while the hourly forecast already had 0.3 mm at 59 % four hours out.
+    """
+    result = core.combine_next_rain(
+        _dry_result(), NOW, _hours((1, 0.0, 0), (2, 0.0, 2), (4, 0.3, 59))
+    )
+
+    assert result.next_rain == NOW + timedelta(hours=4)
+    assert result.next_rain_source == "forecast"
+
+
+def test_both_thresholds_must_be_met() -> None:
+    """Millimetres without confidence is a possibility, not an announcement."""
+    result = core.combine_next_rain(
+        _dry_result(),
+        NOW,
+        _hours((1, 0.4, 20), (2, 0.0, 95), (3, 0.2, 80)),
+    )
+
+    assert result.next_rain == NOW + timedelta(hours=3)
+
+
+def test_radar_wins_inside_its_own_horizon() -> None:
+    """Kilometre resolution beats an hourly forecast point where both can answer."""
+    approaching = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False, True, True, False, False, False, False]),
+    )
+    result = core.combine_next_rain(approaching, NOW, _hours((3, 5.0, 99)))
+
+    assert result.next_rain == approaching.event_start
+    assert result.next_rain_source == "radar"
+
+
+def test_active_rain_reports_now() -> None:
+    active = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(True),
+        forecast_samples=forecast([True, True, False]),
+    )
+    result = core.combine_next_rain(active, NOW, _hours((5, 2.0, 90)))
+
+    assert result.next_rain == NOW
+    assert result.next_rain_source == "radar"
+
+
+def test_no_forecast_leaves_next_rain_empty_rather_than_claiming_dry() -> None:
+    """Without a weather entity the sensor must not imply "no rain for days"."""
+    result = core.combine_next_rain(_dry_result(), NOW, None)
+
+    assert result.next_rain is None
+    assert result.next_rain_source is None
+
+
+def test_hours_already_under_way_are_skipped() -> None:
+    """Announcing 14:00 at 14:30 would read worse than naming the next hour."""
+    hours = [
+        core.ForecastHour(NOW - timedelta(minutes=30), 2.0, 90),
+        core.ForecastHour(NOW + timedelta(minutes=30), 2.0, 90),
+    ]
+    result = core.combine_next_rain(_dry_result(), NOW, hours)
+
+    assert result.next_rain == NOW + timedelta(minutes=30)
+
+
+def test_incomplete_forecast_entries_are_ignored() -> None:
+    """A forecast without probabilities must not silently pass the threshold."""
+    result = core.combine_next_rain(
+        _dry_result(), NOW, _hours((1, 5.0, None), (2, None, 99))
+    )
+
+    assert result.next_rain is None

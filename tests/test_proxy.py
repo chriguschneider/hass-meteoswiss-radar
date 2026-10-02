@@ -122,9 +122,12 @@ def _make_stubs() -> dict[str, ModuleType]:
     vol = ModuleType("voluptuous")
 
     class _Marker:
-        def __init__(self, key: str, default: object = None) -> None:
+        def __init__(
+            self, key: str, default: object = None, description: object = None
+        ) -> None:
             self.key = key
             self.default = default
+            self.description = description
 
         def __hash__(self) -> int:
             return hash(self.key)
@@ -140,6 +143,21 @@ def _make_stubs() -> dict[str, ModuleType]:
     vol.Range = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     vol.Required = _Marker  # type: ignore[attr-defined]
     vol.Optional = _Marker  # type: ignore[attr-defined]
+
+    # Selector stubs: the options flow only builds the schema here, so the
+    # selector needs to be constructible, not functional.
+    ha_sel = ModuleType("homeassistant.helpers.selector")
+
+    class _EntitySelectorConfig(dict):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+
+    class _EntitySelector:
+        def __init__(self, config: object = None) -> None:
+            self.config = config
+
+    ha_sel.EntitySelector = _EntitySelector  # type: ignore[attr-defined]
+    ha_sel.EntitySelectorConfig = _EntitySelectorConfig  # type: ignore[attr-defined]
 
     ha_er = ModuleType("homeassistant.helpers.entity_registry")
     ha_er.entries = []  # type: ignore[attr-defined]
@@ -159,6 +177,7 @@ def _make_stubs() -> dict[str, ModuleType]:
         "homeassistant.helpers": ha_helpers,
         "homeassistant.helpers.aiohttp_client": ha_client,
         "homeassistant.helpers.entity_registry": ha_er,
+        "homeassistant.helpers.selector": ha_sel,
         "voluptuous": vol,
     }
 
@@ -1679,3 +1698,35 @@ def test_options_flow_resolves_entry_via_handler() -> None:
     # The explicit True resolves without touching the registry fallback.
     assert markers["nowcast_enabled"].default is True
     assert markers["protection_min_hold_minutes"].default == 30
+
+
+# ---------------------------------------------------------------------------
+# Tests: the weather entity option (ADR-0010)
+# ---------------------------------------------------------------------------
+
+def test_weather_entity_option_is_read_when_set() -> None:
+    entry = _entry_with_options({"weather_entity_id": "weather.home"})
+
+    assert _integration.forecast_weather_entity(entry) == "weather.home"
+
+
+def test_weather_entity_option_is_trimmed() -> None:
+    entry = _entry_with_options({"weather_entity_id": "  weather.home  "})
+
+    assert _integration.forecast_weather_entity(entry) == "weather.home"
+
+
+@pytest.mark.parametrize("stored", ["", "   ", None, 42, True])
+def test_unusable_weather_entity_reads_as_radar_only(stored: object) -> None:
+    """Anything that is not a usable entity id must mean "radar only".
+
+    Returning the raw value would hand a service call an entity id of `42`,
+    which fails every update rather than once at setup.
+    """
+    entry = _entry_with_options({"weather_entity_id": stored})
+
+    assert _integration.forecast_weather_entity(entry) is None
+
+
+def test_missing_weather_entity_option_reads_as_radar_only() -> None:
+    assert _integration.forecast_weather_entity(_entry_with_options({})) is None

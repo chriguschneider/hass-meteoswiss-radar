@@ -42,6 +42,11 @@ PREDICTED_DRY_HORIZON = timedelta(hours=2)
 # on 00:43, off 00:48, on 00:53, off 01:18 -- and whatever the signal drives,
 # typically an awning motor, cycles with it. Configurable, 0 disables the hold.
 DEFAULT_PROTECTION_MIN_HOLD_MINUTES = 30
+# Thresholds for reading rain out of an hourly model forecast. Both must be met:
+# millimetres alone would let a 10 % drizzle risk announce rain, probability
+# alone would announce an hour the model expects to stay dry.
+DEFAULT_FORECAST_RAIN_MM = 0.1
+DEFAULT_FORECAST_RAIN_PROBABILITY = 50
 
 
 class RainStatus(StrEnum):
@@ -82,6 +87,10 @@ class RainNowcast:
     # the hold is actually keeping the signal up against the state machine.
     protection_since: datetime | None = None
     protection_hold_until: datetime | None = None
+    # When rain is next expected, and which source said so ("radar" inside the
+    # nowcast horizon, "forecast" beyond it). None when neither sees any.
+    next_rain: datetime | None = None
+    next_rain_source: str | None = None
 
 
 def wgs84_to_grid_km(latitude: float, longitude: float) -> tuple[float, float]:
@@ -430,6 +439,79 @@ def _cap_event_end(
     if event_end is None or event_end > now + horizon:
         return None
     return event_end
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastHour:
+    """One hour of a model precipitation forecast, as read from a weather entity."""
+
+    start: datetime
+    precipitation_mm: float | None
+    probability_percent: float | None
+
+
+def next_rain_from_forecast(
+    hours: Iterable[ForecastHour],
+    now: datetime,
+    *,
+    min_mm: float = DEFAULT_FORECAST_RAIN_MM,
+    min_probability: float = DEFAULT_FORECAST_RAIN_PROBABILITY,
+) -> datetime | None:
+    """Return the start of the first hour the model expects rain in.
+
+    Both thresholds must be met.  An hour with millimetres but a low probability
+    is a possibility rather than an announcement; an hour with high probability
+    but no millimetres is cloud the model is confident about.
+
+    Hours already under way are skipped rather than clipped to ``now``: the radar
+    owns everything inside its own horizon, and announcing "rain at 14:00" at
+    14:30 would be worse than naming the next hour.
+    """
+
+    candidates = [
+        hour.start
+        for hour in hours
+        if hour.start > now
+        and hour.precipitation_mm is not None
+        and hour.probability_percent is not None
+        and hour.precipitation_mm >= min_mm
+        and hour.probability_percent >= min_probability
+    ]
+    return min(candidates) if candidates else None
+
+
+def combine_next_rain(
+    result: RainNowcast,
+    now: datetime,
+    forecast_hours: Iterable[ForecastHour] | None,
+    *,
+    min_mm: float = DEFAULT_FORECAST_RAIN_MM,
+    min_probability: float = DEFAULT_FORECAST_RAIN_PROBABILITY,
+) -> RainNowcast:
+    """Fill in ``next_rain`` from the radar first, the hourly model second.
+
+    Radar wins whenever it has an answer: inside its horizon it evaluates the
+    actual location at kilometre resolution and minute cadence, where the model
+    evaluates a forecast point by the hour.  Beyond that horizon the radar has
+    nothing to add -- INCA itself blends into a model out there -- so the hourly
+    forecast answers instead, and ``next_rain_source`` records which one did.
+    """
+
+    if result.status is RainStatus.ACTIVE:
+        return replace(result, next_rain=now, next_rain_source="radar")
+
+    if result.status is RainStatus.APPROACHING and result.event_start is not None:
+        return replace(result, next_rain=result.event_start, next_rain_source="radar")
+
+    if forecast_hours is None:
+        return result
+
+    upcoming = next_rain_from_forecast(
+        forecast_hours, now, min_mm=min_mm, min_probability=min_probability
+    )
+    if upcoming is None:
+        return result
+    return replace(result, next_rain=upcoming, next_rain_source="forecast")
 
 
 def _apply_protection_hold(

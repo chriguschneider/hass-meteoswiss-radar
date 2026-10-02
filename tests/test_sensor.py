@@ -90,7 +90,7 @@ def test_sensor_description_keys() -> None:
     assert {d.key for d in SENSORS} == {
         "nowcast_status",
         "rain_in",
-        "rain_start",
+        "next_rain",
         "expected_dry_from",
     }
 
@@ -157,11 +157,12 @@ def test_update_value_lead_time_minutes_none() -> None:
     assert sensor._attr_native_value is None
 
 
-def test_update_value_event_start() -> None:
+def test_update_value_next_rain() -> None:
     ts = datetime(2024, 6, 1, 10, 0, tzinfo=UTC)
-    data = _make_nowcast(event_start=ts)
-    sensor = _make_sensor(_desc("rain_start"), _make_coordinator(data=data))
+    data = _make_nowcast(next_rain=ts, next_rain_source="forecast")
+    sensor = _make_sensor(_desc("next_rain"), _make_coordinator(data=data))
     assert sensor._attr_native_value == ts
+    assert sensor._attr_extra_state_attributes["source"] == "forecast"
 
 
 def test_update_value_event_end() -> None:

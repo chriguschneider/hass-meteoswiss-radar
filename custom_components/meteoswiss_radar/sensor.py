@@ -53,11 +53,14 @@ SENSORS: Final = (
         value="lead_time_minutes",
     ),
     MeteoSwissRadarNowcastSensorDescription(
-        key="rain_start",
-        translation_key="rain_start",
+        key="next_rain",
+        translation_key="next_rain",
         icon="mdi:weather-pouring",
         device_class=SensorDeviceClass.TIMESTAMP,
-        value="event_start",
+        # Replaces the former `rain_start`, which could only ever answer inside
+        # the radar's 30-minute window and so read `unknown` on any quiet day.
+        # Same question, answered from whichever source can reach that far.
+        value="next_rain",
     ),
     MeteoSwissRadarNowcastSensorDescription(
         key="expected_dry_from",
@@ -126,6 +129,17 @@ class MeteoSwissRadarNowcastSensor(
         if self.entity_description.value == "status":
             value = value.value
         self._attr_native_value = value
+
+        if self.entity_description.key == "next_rain":
+            self._attr_extra_state_attributes = {
+                # Which horizon answered: "radar" is the location at kilometre
+                # resolution, "forecast" the model's forecast point by the hour.
+                "source": data.next_rain_source,
+                "radar_event_start": (
+                    data.event_start.isoformat() if data.event_start else None
+                ),
+            }
+            return
 
         if self.entity_description.key == "nowcast_status":
             self._attr_extra_state_attributes = {

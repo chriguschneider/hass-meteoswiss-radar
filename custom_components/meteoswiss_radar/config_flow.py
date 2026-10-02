@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -13,7 +14,12 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 
-from .const import DOMAIN, OPT_NOWCAST_ENABLED, OPT_PROTECTION_MIN_HOLD
+from .const import (
+    DOMAIN,
+    OPT_NOWCAST_ENABLED,
+    OPT_PROTECTION_MIN_HOLD,
+    OPT_WEATHER_ENTITY,
+)
 
 
 class MeteoSwissRadarConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -57,7 +63,11 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
         # Import here, not at module level: config_flow is imported by HA during
         # discovery, before __init__ has run, and __init__ imports this module's
         # sibling constants only.
-        from . import nowcast_entities_enabled, protection_min_hold_minutes
+        from . import (
+            forecast_weather_entity,
+            nowcast_entities_enabled,
+            protection_min_hold_minutes,
+        )
 
         # Resolve the entry from the flow handler rather than `self.config_entry`:
         # the plain `OptionsFlow.config_entry` property only exists from HA
@@ -79,6 +89,10 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
                         OPT_PROTECTION_MIN_HOLD,
                         default=protection_min_hold_minutes(entry),
                     ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
+                    vol.Optional(
+                        OPT_WEATHER_ENTITY,
+                        description={"suggested_value": forecast_weather_entity(entry)},
+                    ): EntitySelector(EntitySelectorConfig(domain="weather")),
                 }
             ),
         )
