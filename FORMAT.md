@@ -22,7 +22,23 @@ the integration's proxy). All paths below are mirrored 1:1 behind
   (5-min steps, ~12 h back, ~100 KB each).
 - Forecast frames (INCA rate):
   `product/output/inca/precipitation/rate/version__<v>/rate_<YYYYMMDD_HHMM>.json`
-  (10-min steps, ~28 h ahead, ~24 KB each).
+  (~28 h ahead, **5-min steps for the first ~6 h, then 10-min**).
+  Size varies with how much precipitation is on the map, far more than a single
+  figure suggests — measured across one live manifest (206 forecast frames,
+  2026-10-01):
+
+  | lead time | raw | gzipped | `areas` |
+  |---|---|---|---|
+  | +0 h | 68 KB | 16 KB | 6 |
+  | +2 h | 128 KB | 30 KB | 8 |
+  | +6 h | 199 KB | 54 KB | 11 |
+  | +12 h | 123 KB | 34 KB | 9 |
+  | +28 h | 51 KB | 12 KB | 9 |
+
+  The proxy's LRU accounts gzipped bytes, so the third column is the one that
+  spends the cache budget. Budget a full forecast sweep at **~6 MB gzipped**, not
+  the ~5 MB a flat 24 KB would imply — this is why the nowcast coordinator fetches
+  a short lead window rather than the whole forecast.
 - Forecast frames (INCA precipitation-type overlays, issue #92):
   - Snow: `product/output/inca/precipitation/type/snow/version__<v_snow>/snow_<YYYYMMDD_HHMM>.json`
   - Sleet: `product/output/inca/precipitation/type/snowrain/version__<v_snowrain>/snowrain_<YYYYMMDD_HHMM>.json`
@@ -45,7 +61,8 @@ the integration's proxy). All paths below are mirrored 1:1 behind
 
 ## animation.json
 
-- `map_images[0].pictures[]`: ~295 frames, each
+- `map_images[0].pictures[]`: ~280–295 frames (observed 2026-10-01: 279 — 73
+  measurement, 206 forecast), each
   `{ data_type: "measurement"|"forecast", data_type_string, radar_url, day
   ("DD.MM.YYYY"), timepoint ("HH:MM"), timestamp (unix s) }`; forecast frames
   additionally carry `snow_url`, `snowrain_url`, `freezingrain_url` (absolute
