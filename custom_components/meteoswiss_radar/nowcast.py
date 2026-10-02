@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import DOMAIN
 from .nowcast_core import (
     DEFAULT_DRY_WINDOW_MINUTES,
+    DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
     DEFAULT_WARNING_LEAD_MINUTES,
     RainNowcast,
     RainSample,
@@ -44,6 +45,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         proxy: MeteoSwissRadarProxyView,
         latitude: float,
         longitude: float,
+        protection_min_hold_minutes: int = DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
     ) -> None:
         super().__init__(
             hass,
@@ -53,6 +55,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         )
         self._proxy = proxy
         self._x_km, self._y_km = wgs84_to_grid_km(latitude, longitude)
+        self._protection_min_hold_minutes = protection_min_hold_minutes
         self.manifest_generated_at: datetime | None = None
         self.frame_failures = 0
         self.location_in_radar_coverage: bool | None = None
@@ -123,6 +126,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             measurement=measurement,
             forecast_samples=forecast_samples,
             previous=self.data,
+            protection_min_hold_minutes=self._protection_min_hold_minutes,
         )
 
         # On a dry day only the short lead window is needed.  Once rain is
@@ -140,6 +144,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
                 measurement=measurement,
                 forecast_samples=forecast_samples,
                 previous=self.data,
+                protection_min_hold_minutes=self._protection_min_hold_minutes,
             )
 
         self.frame_failures = failures

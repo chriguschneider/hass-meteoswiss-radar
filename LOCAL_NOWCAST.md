@@ -91,6 +91,27 @@ When rain is approaching or active, it extends the forecast fetch adaptively to
 two hours plus the dry-window padding so it can estimate when conditions are
 expected to be dry again.
 
+## Minimum hold on the protection signal
+
+Rain protection stays on for at least **30 minutes** once it switches on, even if
+the radar clears earlier. Adjustable under *Configure*; 0 disables it.
+
+This exists because a shower that clips the location otherwise cycles the signal
+within minutes. From a live instance:
+
+```
+00:43  on
+00:48  off      ← 5 minutes
+00:53  on
+01:18  off
+```
+
+Whatever the binary sensor drives — usually an awning motor — would have run four
+times in 35 minutes. The hold only affects the protection signal: the status
+sensor keeps reporting what the radar actually sees, so a held signal shows up as
+`dry` with protection still on, and the `protection_hold_until` attribute says
+until when.
+
 ## Missing data
 
 Missing or stale current radar data never produces a false all-clear. If the

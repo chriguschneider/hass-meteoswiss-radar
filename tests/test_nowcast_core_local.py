@@ -355,3 +355,115 @@ def test_python_decoder_matches_js_golden() -> None:
                         f"ring={ring_idx} pt={pt_idx}: "
                         f"got={got_lng} expected={exp_lng}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: minimum hold on the protection signal (#212)
+# ---------------------------------------------------------------------------
+
+def _protecting(since: datetime, status: core.RainStatus) -> core.RainNowcast:
+    """A previous cycle in which protection was already up."""
+    return core.RainNowcast(
+        status=status,
+        protection_active=True,
+        currently_wet=status is core.RainStatus.ACTIVE,
+        event_start=since,
+        event_end=None,
+        event_end_open=True,
+        lead_time_minutes=None,
+        forecast_horizon_end=NOW + timedelta(hours=1),
+        measurement_time=NOW,
+        dry_window_minutes=30,
+        warning_lead_minutes=30,
+        protection_since=since,
+    )
+
+
+def test_protection_holds_through_a_short_dry_spell() -> None:
+    """The live failure: a shower clips the location and the signal cycles.
+
+    Recorded on one instance: on 00:43, off 00:48, on 00:53, off 01:18 -- an
+    awning motor would have run four times in 35 minutes.  Five minutes after
+    the signal went up, a dry forecast must not drop it.
+    """
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False] * 6),
+        previous=_protecting(NOW - timedelta(minutes=5), core.RainStatus.APPROACHING),
+        protection_min_hold_minutes=30,
+    )
+
+    assert result.protection_active is True
+    assert result.protection_hold_until == NOW + timedelta(minutes=25)
+    # The status still tells the truth -- only the actuator signal is held.
+    assert result.status == core.RainStatus.DRY
+
+
+def test_protection_drops_once_the_hold_has_passed() -> None:
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False] * 6),
+        previous=_protecting(NOW - timedelta(minutes=31), core.RainStatus.APPROACHING),
+        protection_min_hold_minutes=30,
+    )
+
+    assert result.protection_active is False
+    assert result.protection_hold_until is None
+    assert result.protection_since is None
+
+
+def test_protection_hold_can_be_switched_off() -> None:
+    """Zero restores the old behaviour for anyone who wants the raw signal."""
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False] * 6),
+        previous=_protecting(NOW - timedelta(minutes=1), core.RainStatus.APPROACHING),
+        protection_min_hold_minutes=0,
+    )
+
+    assert result.protection_active is False
+
+
+def test_protection_since_is_stamped_when_the_signal_goes_up() -> None:
+    """Without a stamp the hold has no anchor to measure from."""
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(False),
+        forecast_samples=forecast([False, True, True, False, False, False, False]),
+    )
+
+    assert result.status == core.RainStatus.APPROACHING
+    assert result.protection_since == NOW
+    assert result.protection_hold_until is None
+
+
+def test_protection_since_survives_consecutive_protected_cycles() -> None:
+    """The hold measures from when protection first rose, not from each update."""
+    first_up = NOW - timedelta(minutes=20)
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=measurement(True),
+        forecast_samples=forecast([True, True, False, False]),
+        previous=_protecting(first_up, core.RainStatus.ACTIVE),
+        protection_min_hold_minutes=30,
+    )
+
+    assert result.protection_active is True
+    assert result.protection_since == first_up
+
+
+def test_missing_data_does_not_drop_a_held_signal() -> None:
+    """No data is not a reason to let an actuator move."""
+    result = core.evaluate_nowcast(
+        now=NOW,
+        measurement=None,
+        forecast_samples=[],
+        previous=_protecting(NOW - timedelta(minutes=2), core.RainStatus.APPROACHING),
+        protection_min_hold_minutes=30,
+    )
+
+    assert result.status == core.RainStatus.UNKNOWN
+    assert result.protection_active is True

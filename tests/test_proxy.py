@@ -133,6 +133,11 @@ def _make_stubs() -> dict[str, ModuleType]:
             return self.key == getattr(other, "key", other)
 
     vol.Schema = lambda schema, **kwargs: schema  # type: ignore[attr-defined]
+    # Validators are pass-throughs: the flow only builds a schema here, it never
+    # runs it -- Home Assistant validates the submitted input on its side.
+    vol.All = lambda *validators: validators  # type: ignore[attr-defined]
+    vol.Coerce = lambda typ: typ  # type: ignore[attr-defined]
+    vol.Range = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     vol.Required = _Marker  # type: ignore[attr-defined]
     vol.Optional = _Marker  # type: ignore[attr-defined]
 
@@ -1668,8 +1673,9 @@ def test_options_flow_resolves_entry_via_handler() -> None:
 
     flow.hass.config_entries.async_get_entry.assert_called_once_with(entry.entry_id)
     assert result["step_id"] == "init"
-    # The Required marker carries the default the dialog will preselect; the
-    # explicit True option resolves without touching the registry fallback.
-    (marker,) = list(result["data_schema"])
-    assert marker.key == "nowcast_enabled"
-    assert marker.default is True
+    # The Required markers carry the defaults the dialog will preselect. Looked
+    # up by key rather than unpacked, so adding an option does not break this.
+    markers = {marker.key: marker for marker in result["data_schema"]}
+    # The explicit True resolves without touching the registry fallback.
+    assert markers["nowcast_enabled"].default is True
+    assert markers["protection_min_hold_minutes"].default == 30

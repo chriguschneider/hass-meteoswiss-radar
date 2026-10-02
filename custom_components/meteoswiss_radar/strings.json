@@ -15,10 +15,12 @@
       "init": {
         "title": "MeteoSwiss Radar options",
         "data": {
-          "nowcast_enabled": "Local rain-nowcast entities"
+          "nowcast_enabled": "Local rain-nowcast entities",
+          "protection_min_hold_minutes": "Minimum rain-protection hold (minutes)"
         },
         "data_description": {
-          "nowcast_enabled": "Evaluates the radar at the Home Assistant location and adds rain-nowcast sensors plus a rain-protection binary sensor for automations. Polls MeteoSwiss every 5 minutes while enabled; leave it off if you only want the card."
+          "nowcast_enabled": "Evaluates the radar at the Home Assistant location and adds rain-nowcast sensors plus a rain-protection binary sensor for automations. Polls MeteoSwiss every 5 minutes while enabled; leave it off if you only want the card.",
+          "protection_min_hold_minutes": "Once rain protection switches on it stays on for at least this long, even if the radar clears earlier. Prevents a passing shower from cycling whatever the signal drives — typically an awning motor. 0 disables the hold."
         }
       }
     }

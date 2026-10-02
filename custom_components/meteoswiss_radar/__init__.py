@@ -32,9 +32,12 @@ from .const import (
     DOMAIN,
     FRONTEND_URL_BASE,
     OPT_NOWCAST_ENABLED,
+    OPT_PROTECTION_MIN_HOLD,
     PROXY_URL,
     UPSTREAM_BASE,
 )
+
+from .nowcast_core import DEFAULT_PROTECTION_MIN_HOLD_MINUTES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -504,6 +507,24 @@ def nowcast_entities_enabled(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return _entry_has_nowcast_entities(hass, entry)
 
 
+def protection_min_hold_minutes(entry: ConfigEntry) -> int:
+    """Return the configured minimum hold for the protection signal, in minutes.
+
+    A stored value that is not a usable int falls back to the default rather
+    than propagating into the state machine: the hold guards an actuator, so a
+    corrupted option must not silently disable it.
+    """
+    options = getattr(entry, "options", None)
+    stored = (
+        options.get(OPT_PROTECTION_MIN_HOLD)
+        if isinstance(options, Mapping)
+        else None
+    )
+    if isinstance(stored, bool) or not isinstance(stored, int) or stored < 0:
+        return DEFAULT_PROTECTION_MIN_HOLD_MINUTES
+    return stored
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload so toggling the option creates or removes the entities at once."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -541,6 +562,7 @@ async def _async_setup_nowcast(
         proxy,
         latitude=latitude,
         longitude=longitude,
+        protection_min_hold_minutes=protection_min_hold_minutes(entry),
     )
     await coordinator.async_refresh()
     if coordinator.location_in_radar_coverage is False:

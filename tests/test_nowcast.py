@@ -740,7 +740,7 @@ def test_async_update_data_adaptive_second_pass_reruns_evaluate() -> None:
 
     evaluate_calls: list = []
 
-    def _fake_evaluate(now, measurement, forecast_samples, previous):  # noqa: ANN001
+    def _fake_evaluate(now, measurement, forecast_samples, previous, **_kwargs):  # noqa: ANN001
         evaluate_calls.append(1)
         return active_nowcast
 

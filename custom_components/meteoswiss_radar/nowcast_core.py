@@ -8,7 +8,7 @@ location and the small rain-event state machine used by the HA entities.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from math import ceil
@@ -23,6 +23,11 @@ NON_PRECIPITATION_COLORS = {"333e48", "ffffff"}
 # Advection-based nowcasting is only reliable inside this window; beyond it the
 # predicted-dry sensor is suppressed rather than extrapolated.
 PREDICTED_DRY_HORIZON = timedelta(hours=2)
+# Minimum time the protection signal stays on once raised. Without it a shower
+# that clips the location cycles the signal within minutes -- observed live:
+# on 00:43, off 00:48, on 00:53, off 01:18 -- and whatever the signal drives,
+# typically an awning motor, cycles with it. Configurable, 0 disables the hold.
+DEFAULT_PROTECTION_MIN_HOLD_MINUTES = 30
 
 
 class RainStatus(StrEnum):
@@ -58,6 +63,11 @@ class RainNowcast:
     measurement_time: datetime | None
     dry_window_minutes: int
     warning_lead_minutes: int
+    # When protection was last raised, and the earliest it may drop again. Both
+    # are None while protection is off. `protection_hold_until` is only set when
+    # the hold is actually keeping the signal up against the state machine.
+    protection_since: datetime | None = None
+    protection_hold_until: datetime | None = None
 
 
 def wgs84_to_grid_km(latitude: float, longitude: float) -> tuple[float, float]:
@@ -322,7 +332,49 @@ def _cap_event_end(
     return event_end
 
 
-def evaluate_nowcast(
+def _apply_protection_hold(
+    result: RainNowcast,
+    previous: RainNowcast | None,
+    now: datetime,
+    min_hold_minutes: int,
+) -> RainNowcast:
+    """Keep the protection signal up for at least ``min_hold_minutes``.
+
+    Only the protection flag is held. ``status`` keeps telling the truth, so a
+    held signal is visible as "dry" with protection still on rather than as a
+    phantom rain event -- and ``protection_hold_until`` says until when.
+
+    An UNKNOWN result is held too: no data is not a reason to drop an actuator
+    signal that is already up, and dropping it would be the flapping this
+    prevents.
+    """
+
+    was_protecting = previous is not None and previous.protection_active is True
+
+    if result.protection_active is True:
+        since = previous.protection_since if was_protecting else None
+        return replace(result, protection_since=since or now)
+
+    if min_hold_minutes <= 0 or not was_protecting:
+        return result
+
+    since = previous.protection_since if previous is not None else None
+    if since is None:
+        return result
+
+    hold_until = since + timedelta(minutes=min_hold_minutes)
+    if now >= hold_until:
+        return result
+
+    return replace(
+        result,
+        protection_active=True,
+        protection_since=since,
+        protection_hold_until=hold_until,
+    )
+
+
+def _evaluate_rain_state(
     *,
     now: datetime,
     measurement: RainSample | None,
@@ -460,3 +512,32 @@ def evaluate_nowcast(
         dry_window_minutes=dry_window_minutes,
         warning_lead_minutes=warning_lead_minutes,
     )
+
+
+def evaluate_nowcast(
+    *,
+    now: datetime,
+    measurement: RainSample | None,
+    forecast_samples: Iterable[RainSample],
+    previous: RainNowcast | None = None,
+    warning_lead_minutes: int = DEFAULT_WARNING_LEAD_MINUTES,
+    dry_window_minutes: int = DEFAULT_DRY_WINDOW_MINUTES,
+    forecast_step_minutes: int = DEFAULT_FORECAST_STEP_MINUTES,
+    protection_min_hold_minutes: int = DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
+) -> RainNowcast:
+    """Evaluate the rain state, then hold the protection signal against flapping.
+
+    The state machine and the hold are deliberately separate: the first answers
+    "what is the weather doing", the second answers "may the actuator move yet".
+    """
+
+    result = _evaluate_rain_state(
+        now=now,
+        measurement=measurement,
+        forecast_samples=forecast_samples,
+        previous=previous,
+        warning_lead_minutes=warning_lead_minutes,
+        dry_window_minutes=dry_window_minutes,
+        forecast_step_minutes=forecast_step_minutes,
+    )
+    return _apply_protection_hold(result, previous, now, protection_min_hold_minutes)

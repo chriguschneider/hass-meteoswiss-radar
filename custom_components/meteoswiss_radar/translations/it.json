@@ -15,10 +15,12 @@
       "init": {
         "title": "Opzioni MeteoSwiss Radar",
         "data": {
-          "nowcast_enabled": "Entità di nowcast della pioggia locale"
+          "nowcast_enabled": "Entità di nowcast della pioggia locale",
+          "protection_min_hold_minutes": "Durata minima della protezione pioggia (minuti)"
         },
         "data_description": {
-          "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant e aggiunge sensori di nowcast della pioggia e un sensore binario di protezione dalla pioggia per le automazioni. Interroga MeteoSwiss ogni 5 minuti quando è attiva; lasciala disattivata se vuoi solo la card."
+          "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant e aggiunge sensori di nowcast della pioggia e un sensore binario di protezione dalla pioggia per le automazioni. Interroga MeteoSwiss ogni 5 minuti quando è attiva; lasciala disattivata se vuoi solo la card.",
+          "protection_min_hold_minutes": "Una volta attivata, la protezione pioggia resta attiva almeno per questo tempo, anche se il radar dà prima il cessato allarme. Evita che un rovescio di passaggio faccia ciclare il motore collegato, di solito quello di una tenda. 0 disattiva il mantenimento."
         }
       }
     }

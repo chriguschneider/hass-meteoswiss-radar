@@ -91,6 +91,23 @@ the entry mid-setup — the absence of an explicit choice is resolved from the
 entity registry on each setup, and an entry that already owns nowcast entities
 reads as enabled. The first visit to the options dialog persists a real boolean.
 
+## Update 2026-10-02 (issue #212): minimum hold on the protection signal
+
+The decision above clears protection as soon as a dry window is confirmed. On a
+live instance that produced on 00:43, off 00:48, on 00:53, off 01:18 — a shower
+clipping the location, and four motor runs in 35 minutes for whatever the binary
+sensor drives.
+
+Protection now stays up for a configurable minimum (`protection_min_hold_minutes`,
+default 30, 0 disables) once raised. The hold applies to the protection flag only:
+`status` keeps reporting what the radar sees, so a held signal reads as `dry` with
+protection on, and `protection_hold_until` records the reason. A missing-data
+cycle is held as well — no data is not a reason to release an actuator signal
+that is already up, and releasing it is the flapping this prevents.
+
+The state machine and the hold are separate functions on purpose: one answers
+"what is the weather doing", the other "may the actuator move yet".
+
 ## Consequences
 
 - Automations can consume the same radar data as the card through stable Home

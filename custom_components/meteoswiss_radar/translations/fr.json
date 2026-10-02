@@ -15,10 +15,12 @@
       "init": {
         "title": "Options MeteoSwiss Radar",
         "data": {
-          "nowcast_enabled": "Entités de prévision de pluie locale"
+          "nowcast_enabled": "Entités de prévision de pluie locale",
+          "protection_min_hold_minutes": "Durée minimale de la protection pluie (minutes)"
         },
         "data_description": {
-          "nowcast_enabled": "Évalue le radar à l'emplacement de Home Assistant et ajoute des capteurs de prévision de pluie ainsi qu'un capteur binaire de protection contre la pluie pour les automatisations. Interroge MeteoSwiss toutes les 5 minutes lorsque l'option est active ; laissez-la désactivée si vous ne voulez que la carte."
+          "nowcast_enabled": "Évalue le radar à l'emplacement de Home Assistant et ajoute des capteurs de prévision de pluie ainsi qu'un capteur binaire de protection contre la pluie pour les automatisations. Interroge MeteoSwiss toutes les 5 minutes lorsque l'option est active ; laissez-la désactivée si vous ne voulez que la carte.",
+          "protection_min_hold_minutes": "Une fois activée, la protection pluie reste active au moins ce temps, même si le radar donne la fin d'alerte plus tôt. Évite qu'une averse de passage fasse cycler le moteur raccordé, typiquement celui d'un store. 0 désactive le maintien."
         }
       }
     }
