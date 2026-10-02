@@ -244,8 +244,10 @@ def test_real_fixture_uses_legend_threshold_and_unknown_fallback() -> None:
     fixture = json.loads(
         (ROOT / "tests" / "fixtures" / "frame.json").read_text(encoding="utf-8")
     )
+    bands = core._sorted_legend(LEGEND)
 
-    # The fixture's observed 9e849a maps to the lowest 0-1 mm/h legend band.
+    # The fixture's first area is the lowest band: 8.8 units from its legend
+    # colour, so it validates, and 0-1 mm/h is below the threshold.
     assert (
         core.frame_is_wet_at_grid_point(fixture, 610.3328, 160.6157, LEGEND)
         is False
@@ -258,10 +260,14 @@ def test_real_fixture_uses_legend_threshold_and_unknown_fallback() -> None:
         rain_threshold_mm_h=0.0,
     )
 
-    # Reuse the real geometry with the animation fixture's first wet band.
-    fixture["areas"][0]["color"] = next(
-        band["color"] for band in LEGEND if band["min"] == 1
-    )
+    # Reuse the real geometry as the *second* area, where the band above the
+    # threshold lives. The colour has to match that position, not just be a
+    # rainy colour from anywhere in the legend.
+    geometry = fixture["areas"][0]
+    fixture["areas"] = [
+        {**geometry, "color": bands[0][1]},
+        {**geometry, "color": bands[1][1]},
+    ]
     assert core.frame_is_wet_at_grid_point(
         fixture,
         610.3328,
@@ -269,35 +275,46 @@ def test_real_fixture_uses_legend_threshold_and_unknown_fallback() -> None:
         LEGEND,
     )
 
-    # A valid RGB colour beyond the matching cap is neither wet nor dry.
-    fixture["areas"][0]["color"] = "010101"
-    assert (
-        core.frame_is_wet_at_grid_point(fixture, 610.3328, 160.6157, LEGEND)
-        is None
-    )
-
-    assert core.frame_is_wet_at_grid_point(fixture, 800.0, 400.0, LEGEND) is False
-    assert core.frame_is_wet_at_grid_point(fixture, 1000.0, 500.0, LEGEND) is None
-
 
 def test_documented_frame_colour_drift_stays_within_matching_cap() -> None:
-    fixture = json.loads(
-        (ROOT / "tests" / "fixtures" / "frame.json").read_text(encoding="utf-8")
-    )
+    """Measurement frames use a different palette than the legend.
 
-    assert core._legend_band_min_for_color(fixture["areas"][0]["color"], LEGEND) == 0
-    assert core._legend_band_min_for_color(fixture["areas"][1]["color"], LEGEND) is None
+    Measured over six live frames: real bands sit up to 83.8 units from their
+    positional legend colour, the background colours at least 203.5. The
+    fixture's `9e849a` is the documented 8.8-unit case; `52af2a` matches no
+    band at its position.
+    """
+    bands = core._sorted_legend(LEGEND)
+
+    assert core._legend_band_min_for_area("9e849a", 0, bands) == 0
+    assert core._legend_band_min_for_area("52af2a", 1, bands) is None
+    # Beyond the legend there is no band to validate against -- which is how
+    # the trailing background areas are rejected.
+    assert core._legend_band_min_for_area(bands[0][1], len(bands), bands) is None
+
+
+def test_legend_is_sorted_before_it_is_indexed() -> None:
+    """The manifest publishes the legend descending; areas[] runs ascending."""
+    descending = list(reversed(LEGEND))
+
+    assert core._sorted_legend(descending) == core._sorted_legend(LEGEND)
+    assert [minimum for minimum, _ in core._sorted_legend(descending)] == sorted(
+        float(band["min"]) for band in LEGEND
+    )
 
 
 def test_confident_rain_wins_over_overlapping_unclassifiable_area() -> None:
     fixture = json.loads(
         (ROOT / "tests" / "fixtures" / "frame.json").read_text(encoding="utf-8")
     )
-    containing_area = fixture["areas"][0]
-    wet_color = next(band["color"] for band in LEGEND if band["min"] == 1)
+    bands = core._sorted_legend(LEGEND)
+    geometry = fixture["areas"][0]
+    # Index 1 is a band above the threshold; index 2 carries a colour that
+    # matches nothing, so it is unclassifiable.
     fixture["areas"] = [
-        {**containing_area, "color": wet_color},
-        {**containing_area, "color": "52af2a"},
+        {**geometry, "color": bands[0][1]},
+        {**geometry, "color": bands[1][1]},
+        {**geometry, "color": "52af2a"},
     ]
 
     assert core.frame_is_wet_at_grid_point(
@@ -306,6 +323,7 @@ def test_confident_rain_wins_over_overlapping_unclassifiable_area() -> None:
         160.6157,
         LEGEND,
     )
+
 
 
 def test_overlapping_unknown_prevents_false_all_clear() -> None:
@@ -544,3 +562,77 @@ def test_missing_data_does_not_drop_a_held_signal() -> None:
 
     assert result.status == core.RainStatus.UNKNOWN
     assert result.protection_active is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: RZC and INCA use different palettes for the same bands
+# ---------------------------------------------------------------------------
+
+# Measured from live data on 2026-10-02 over six frames (45 areas). The legend
+# the manifest publishes matches the INCA forecast palette exactly; the RZC
+# measurement frames carry their own colours for the same bands, up to 83.8 RGB
+# units away. Both are listed ascending, as areas[] arrives.
+_LIVE_LEGEND = [
+    {"min": 60, "color": "#AF00DD"},   # published descending on purpose:
+    {"min": 40, "color": "#FF1900"},   # the sort is part of what is tested
+    {"min": 20, "color": "#FF7D01"},
+    {"min": 10, "color": "#FFC703"},
+    {"min": 6, "color": "#FEFF01"},
+    {"min": 4, "color": "#05FF05"},
+    {"min": 2, "color": "#058C2D"},
+    {"min": 1, "color": "#0001FC"},
+    {"min": 0, "color": "#9A7E95"},
+]
+_RZC_AREA_COLOURS = [
+    "9e849a", "2a00fa", "2a933b", "49ff36", "fcff2d",
+    "faca1e", "f87c00", "f70c00", "ac00db",
+]
+_INCA_AREA_COLOURS = [
+    "9a7e95", "0001fc", "058c2d", "05ff05", "feff01", "ffc703",
+]
+_BACKGROUND_COLOURS = ["ffffff", "333e48"]
+
+
+def test_measurement_palette_classifies_despite_drifting_from_the_legend() -> None:
+    """Every RZC band must classify, drift and all.
+
+    A nearest-colour search cannot do this: these colours sit up to 83.8 units
+    from their legend counterpart while the two closest legend colours can be
+    31 apart, so no single cap both keeps them and separates them from the
+    background. Validating the positional candidate has no such conflict.
+    """
+    bands = core._sorted_legend(_LIVE_LEGEND)
+    expected = [0, 1, 2, 4, 6, 10, 20, 40, 60]
+
+    actual = [
+        core._legend_band_min_for_area(colour, index, bands)
+        for index, colour in enumerate(_RZC_AREA_COLOURS)
+    ]
+
+    assert actual == expected
+
+
+def test_forecast_palette_classifies_too() -> None:
+    bands = core._sorted_legend(_LIVE_LEGEND)
+
+    actual = [
+        core._legend_band_min_for_area(colour, index, bands)
+        for index, colour in enumerate(_INCA_AREA_COLOURS)
+    ]
+
+    assert actual == [0, 1, 2, 4, 6, 10]
+
+
+def test_background_colours_are_rejected_wherever_they_sit() -> None:
+    """They trail the precipitation run, but are rejected on colour as well.
+
+    Two independent guards: position (they arrive after the bands, so there is
+    no band to validate against) and distance. `333e48` is the reason the cap
+    sits at 90 rather than mid-gap — it is only 94.5 units from the 2-4 mm/h
+    colour, so a looser cap would accept it at that one position.
+    """
+    bands = core._sorted_legend(_LIVE_LEGEND)
+
+    for index in range(len(bands) + 2):
+        for colour in _BACKGROUND_COLOURS:
+            assert core._legend_band_min_for_area(colour, index, bands) is None

@@ -22,10 +22,18 @@ MAX_FORECAST_GAP_MINUTES = 15
 # The lowest 0-1 mm/h band is deliberately ignored because weak radar echoes
 # are the regime most affected by virga, ground clutter, and beam shielding.
 DEFAULT_RAIN_THRESHOLD_MM_H = 1.0
-# The closest fixture legend colours are 31 RGB units apart. Keeping the cap
-# below half that gap makes accepted nearest-colour matches unambiguous while
-# still allowing the documented 8.8-unit frame-to-legend drift.
-MAX_LEGEND_COLOR_DISTANCE = 15.0
+# A band is identified by its position in `areas[]`, so the colour is only a
+# sanity check on one candidate rather than a search key. Measured over six live
+# frames (45 areas, both products): real bands sit at most 83.8 units from their
+# positional legend colour, and at the positions the background colours actually
+# occupy they miss by at least 203.5.
+#
+# The cap is nonetheless set just above the worst real drift rather than in the
+# middle of that gap: `333e48` happens to sit 94.5 units from the 2-4 mm/h
+# colour, so a looser cap would accept it if it ever appeared at that position.
+# Ordering alone already rules that out -- it trails the precipitation run -- but
+# the two guards are cheap to keep independent.
+MAX_LEGEND_COLOR_DISTANCE = 90.0
 # Advection-based nowcasting is only reliable inside this window; beyond it the
 # predicted-dry sensor is suppressed rather than extrapolated.
 PREDICTED_DRY_HORIZON = timedelta(hours=2)
@@ -222,43 +230,65 @@ def _parse_rgb(value: object) -> tuple[int, int, int] | None:
         return None
 
 
-def _legend_band_min_for_color(
-    color: object,
-    legend: Sequence[dict[str, Any]],
-) -> float | None:
-    """Return the minimum intensity of the nearest credible legend colour."""
-    area_rgb = _parse_rgb(color)
-    if area_rgb is None:
-        return None
+def _sorted_legend(legend: Sequence[dict[str, Any]]) -> list[tuple[float, str]]:
+    """Return usable legend bands as (min, colour), ascending by intensity.
 
-    nearest_distance_squared = float("inf")
-    nearest_minimum: float | None = None
+    The manifest publishes the legend **descending** (60+ first), while
+    ``areas[]`` runs ascending, so the two only line up after sorting.
+    """
+
+    bands: list[tuple[float, str]] = []
     for band in legend:
         if not isinstance(band, dict):
             continue
-        legend_rgb = _parse_rgb(band.get("color"))
+        colour = band.get("color")
         try:
             minimum = float(band["min"])
         except (KeyError, TypeError, ValueError):
             continue
-        if legend_rgb is None:
+        if _parse_rgb(colour) is None:
             continue
+        bands.append((minimum, str(colour)))
+    return sorted(bands)
 
-        distance_squared = sum(
-            (area_channel - legend_channel) ** 2
-            for area_channel, legend_channel in zip(
-                area_rgb,
-                legend_rgb,
-                strict=True,
-            )
-        )
-        if distance_squared < nearest_distance_squared:
-            nearest_distance_squared = distance_squared
-            nearest_minimum = minimum
 
-    if nearest_distance_squared > MAX_LEGEND_COLOR_DISTANCE**2:
+def _legend_band_min_for_area(
+    color: object,
+    index: int,
+    bands: Sequence[tuple[float, str]],
+) -> float | None:
+    """Return the band minimum for the area at ``index``, or None if unknown.
+
+    `FORMAT.md` documents that ``areas[]`` is ordered lowest intensity first, so
+    an area's position *is* its band — the colour then only has to confirm it.
+    Searching for the nearest colour instead looks more robust and is not: RZC
+    measurement frames and INCA forecast frames use different palettes for the
+    same bands, measured at up to 83.8 units apart, while the closest two legend
+    colours can be as little as 31 apart. Any cap tight enough to make a search
+    unambiguous throws away most real measurement bands; any cap loose enough to
+    keep them cannot separate them from the background by distance alone.
+
+    Validating one positional candidate has neither problem: there is nothing to
+    confuse it with, and the background colours miss their positional band by
+    more than twice the worst real drift.
+    """
+
+    area_rgb = _parse_rgb(color)
+    if area_rgb is None or index >= len(bands):
         return None
-    return nearest_minimum
+
+    minimum, band_colour = bands[index]
+    band_rgb = _parse_rgb(band_colour)
+    if band_rgb is None:
+        return None
+
+    distance_squared = sum(
+        (area_channel - band_channel) ** 2
+        for area_channel, band_channel in zip(area_rgb, band_rgb, strict=True)
+    )
+    if distance_squared > MAX_LEGEND_COLOR_DISTANCE**2:
+        return None
+    return minimum
 
 
 def frame_is_wet_at_grid_point(
@@ -274,8 +304,9 @@ def frame_is_wet_at_grid_point(
         return None
 
     coords = frame["coords"]
+    bands = _sorted_legend(legend)
     classification: bool | None = False
-    for area in frame.get("areas") or []:
+    for index, area in enumerate(frame.get("areas") or []):
         for shape in area.get("shapes") or []:
             if not shape:
                 continue
@@ -287,7 +318,7 @@ def frame_is_wet_at_grid_point(
                 for hole in shape[1:]
             )
             if not in_hole:
-                minimum = _legend_band_min_for_color(area.get("color"), legend)
+                minimum = _legend_band_min_for_area(area.get("color"), index, bands)
                 if minimum is not None and minimum >= rain_threshold_mm_h:
                     # A confidently wet band wins over overlapping unknown
                     # areas; never let uncertainty create a false all-clear.
