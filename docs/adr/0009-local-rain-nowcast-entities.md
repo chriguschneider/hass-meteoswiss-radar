@@ -107,6 +107,44 @@ that is already up, and releasing it is the flapping this prevents.
 The state machine and the hold are separate functions on purpose: one answers
 "what is the weather doing", the other "may the actuator move yet".
 
+## Update 2026-10-02: the band comes from the area's position, not its colour
+
+The legend classification landed with a nearest-colour search and a distance cap.
+Measuring it against live frames showed the search cannot work, for a reason
+neither the fixtures nor `FORMAT.md` exposed: **RZC measurement frames and INCA
+forecast frames use different palettes for the same bands.**
+
+Over six frames (45 areas, 2026-10-02):
+
+| | distance to the legend colour |
+|---|---|
+| INCA forecast bands | **0.0** — the published legend *is* the forecast palette |
+| RZC measurement bands | 7.1 · 8.8 · 27.6 · 40.2 · 42.1 · 44.0 · **83.8** |
+| `333e48` (background) | 94.5 at its nearest band |
+| `ffffff` (no data) | 195.1 at its nearest band |
+
+The two closest legend colours are 31 units apart, so a search cap tight enough
+to be unambiguous (≤ 15) discards five of seven measurement bands — "is it
+raining now" would read `unknown` through most real rain — while a cap loose
+enough to keep them (85) sits ten units from the background and classifies by a
+margin that happens to hold.
+
+`FORMAT.md` documents that `areas[]` is ordered lowest intensity first, so an
+area's **position is its band** and the colour only has to confirm it. With one
+candidate instead of nine there is nothing to confuse, and at the positions the
+background actually occupies it misses by 203.5 against 83.8 for the worst real
+band.
+
+Note the legend is published **descending** while `areas[]` runs ascending, so it
+is sorted before being indexed. The cap stays at 90, just above the worst real
+drift rather than mid-gap, because `333e48` is 94.5 from the 2-4 mm/h colour and
+ordering should not be the only thing keeping it out of that slot.
+
+Also recorded: the legend itself changes. The committed fixture carries bands
+0-1 / 1-5 / 5-10 / 20-30; live today they are 0-1 / 1-2 / 2-4 / 4-6. Numbers
+derived from the fixture are not stable ground truth, which is how the first cap
+came to be wrong.
+
 ## Consequences
 
 - Automations can consume the same radar data as the card through stable Home
