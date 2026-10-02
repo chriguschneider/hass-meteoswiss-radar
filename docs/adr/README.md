@@ -37,3 +37,4 @@ added test coverage, and prose/style tweaks.
 - [0007 — SonarCloud quality gate via CI-based analysis](0007-sonarcloud-quality-gate.md)
 - [0008 — Ship a zip release asset so installs are countable](0008-zip-release-asset.md)
 - [0009 — Local rain nowcast entities](0009-local-rain-nowcast-entities.md)
+- [0010 — "Next rain" is layered, and reads the weather entity through HA](0010-layered-next-rain.md)

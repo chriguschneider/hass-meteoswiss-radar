@@ -122,9 +122,12 @@ def _make_stubs() -> dict[str, ModuleType]:
     vol = ModuleType("voluptuous")
 
     class _Marker:
-        def __init__(self, key: str, default: object = None) -> None:
+        def __init__(
+            self, key: str, default: object = None, description: object = None
+        ) -> None:
             self.key = key
             self.default = default
+            self.description = description
 
         def __hash__(self) -> int:
             return hash(self.key)
@@ -140,6 +143,21 @@ def _make_stubs() -> dict[str, ModuleType]:
     vol.Range = lambda **kwargs: kwargs  # type: ignore[attr-defined]
     vol.Required = _Marker  # type: ignore[attr-defined]
     vol.Optional = _Marker  # type: ignore[attr-defined]
+
+    # Selector stubs: the options flow only builds the schema here, so the
+    # selector needs to be constructible, not functional.
+    ha_sel = ModuleType("homeassistant.helpers.selector")
+
+    class _EntitySelectorConfig(dict):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+
+    class _EntitySelector:
+        def __init__(self, config: object = None) -> None:
+            self.config = config
+
+    ha_sel.EntitySelector = _EntitySelector  # type: ignore[attr-defined]
+    ha_sel.EntitySelectorConfig = _EntitySelectorConfig  # type: ignore[attr-defined]
 
     ha_er = ModuleType("homeassistant.helpers.entity_registry")
     ha_er.entries = []  # type: ignore[attr-defined]
@@ -159,6 +177,7 @@ def _make_stubs() -> dict[str, ModuleType]:
         "homeassistant.helpers": ha_helpers,
         "homeassistant.helpers.aiohttp_client": ha_client,
         "homeassistant.helpers.entity_registry": ha_er,
+        "homeassistant.helpers.selector": ha_sel,
         "voluptuous": vol,
     }
 

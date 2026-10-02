@@ -15,6 +15,10 @@ OPT_NOWCAST_ENABLED = "nowcast_enabled"
 # otherwise cycles it within minutes.
 OPT_PROTECTION_MIN_HOLD = "protection_min_hold_minutes"
 
+# Weather entity whose hourly forecast answers "next rain" beyond the radar's
+# own horizon. Empty means radar only (ADR-0010).
+OPT_WEATHER_ENTITY = "weather_entity_id"
+
 # Keep in sync with manifest.json and the card's CARD_VERSION.
 VERSION = "0.15.0"
 

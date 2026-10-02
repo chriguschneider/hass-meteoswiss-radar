@@ -27,7 +27,13 @@ on upgrade — an existing rain-protection automation keeps working.
   `approaching`, `active`, or `unknown`.
 - `sensor.meteoswiss_radar_rain_in` reports the approximate lead time in
   minutes while rain is approaching.
-- `sensor.meteoswiss_radar_rain_start` reports the predicted event start.
+- `sensor.meteoswiss_radar_next_rain` reports when rain is next expected. Inside
+  the radar's own horizon that is the measured event; beyond it, the first hour
+  of a configured weather entity's forecast with at least 0.1 mm and 50 %
+  probability. A `source` attribute says which answered — `radar` or `forecast`.
+  Without a weather entity configured it stays empty beyond the radar horizon
+  rather than implying a dry week. See
+  [ADR-0010](docs/adr/0010-layered-next-rain.md).
 - `sensor.meteoswiss_radar_expected_dry_from` (displayed as "Expected dry again
   from" / "Voraussichtlich trocken ab" / "Sec à nouveau prévu à partir de" /
   "Di nuovo asciutto previsto da") estimates when conditions are expected to be
@@ -92,6 +98,21 @@ On a dry day the coordinator only fetches the short lead window (~3 frames).
 When rain is approaching or active, it extends the forecast fetch adaptively to
 two hours plus the dry-window padding so it can estimate when conditions are
 expected to be dry again.
+
+## Seeing further than the radar
+
+The radar looks 30 minutes ahead, 2 hours once rain is under way. That is its
+range, and scanning the full ~28 h of forecast frames would cost about 6 MB every
+five minutes to answer at a quality a model already provides.
+
+So `Next rain` borrows: pick a **weather entity** under *Configure*, and beyond
+the radar horizon it reads that entity's hourly forecast. On one measured
+afternoon the radar reported `dry` while the forecast already had rain four hours
+out — the sensor then says `today 17:00` with `source: forecast` instead of
+nothing.
+
+The rain-protection binary sensor is deliberately **not** layered. It drives an
+actuator, and hour-resolution model data would make that decision worse.
 
 ## Minimum hold on the protection signal
 

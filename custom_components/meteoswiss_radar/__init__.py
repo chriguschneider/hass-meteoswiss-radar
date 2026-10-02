@@ -33,6 +33,7 @@ from .const import (
     FRONTEND_URL_BASE,
     OPT_NOWCAST_ENABLED,
     OPT_PROTECTION_MIN_HOLD,
+    OPT_WEATHER_ENTITY,
     PROXY_URL,
     UPSTREAM_BASE,
 )
@@ -525,6 +526,19 @@ def protection_min_hold_minutes(entry: ConfigEntry) -> int:
     return stored
 
 
+def forecast_weather_entity(entry: ConfigEntry) -> str | None:
+    """Return the weather entity whose hourly forecast extends `next_rain`.
+
+    None means radar only: the sensor then answers inside the nowcast horizon and
+    stays empty beyond it, which is what it did before this option existed.
+    """
+    options = getattr(entry, "options", None)
+    stored = options.get(OPT_WEATHER_ENTITY) if isinstance(options, Mapping) else None
+    if not isinstance(stored, str) or not stored.strip():
+        return None
+    return stored.strip()
+
+
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload so toggling the option creates or removes the entities at once."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -563,6 +577,7 @@ async def _async_setup_nowcast(
         latitude=latitude,
         longitude=longitude,
         protection_min_hold_minutes=protection_min_hold_minutes(entry),
+        weather_entity_id=forecast_weather_entity(entry),
     )
     await coordinator.async_refresh()
     if coordinator.location_in_radar_coverage is False:

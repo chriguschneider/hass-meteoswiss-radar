@@ -14,6 +14,8 @@ from .const import DOMAIN
 from .nowcast_core import (
     DEFAULT_DRY_WINDOW_MINUTES,
     DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
+    ForecastHour,
+    combine_next_rain,
     DEFAULT_WARNING_LEAD_MINUTES,
     RainNowcast,
     RainSample,
@@ -46,6 +48,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         latitude: float,
         longitude: float,
         protection_min_hold_minutes: int = DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
+        weather_entity_id: str | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -56,6 +59,8 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         self._proxy = proxy
         self._x_km, self._y_km = wgs84_to_grid_km(latitude, longitude)
         self._protection_min_hold_minutes = protection_min_hold_minutes
+        self._weather_entity_id = weather_entity_id or None
+        self.forecast_available: bool | None = None
         self.manifest_generated_at: datetime | None = None
         self.frame_failures = 0
         self.location_in_radar_coverage: bool | None = None
@@ -153,7 +158,49 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             )
 
         self.frame_failures = failures
-        return raw
+        return combine_next_rain(raw, now, await self._async_forecast_hours())
+
+    async def _async_forecast_hours(self) -> list[ForecastHour] | None:
+        """Read the configured weather entity's hourly precipitation forecast.
+
+        Deliberately a plain service call through the state machine, not an
+        import of the sibling integration: the two stay separate installs with
+        separate upstreams, and this is the coupling their ADR-0003 allows.
+        Returning None means "no forecast available", which leaves next_rain to
+        the radar alone rather than silently reporting no rain.
+        """
+
+        if not self._weather_entity_id:
+            self.forecast_available = None
+            return None
+
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": self._weather_entity_id, "type": "hourly"},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as err:
+            # A missing entity, an integration that is still starting, or one
+            # without an hourly forecast must not fail the radar update.
+            _LOGGER.debug(
+                "Hourly forecast from %s unavailable: %s",
+                self._weather_entity_id,
+                err,
+            )
+            self.forecast_available = False
+            return None
+
+        entry = (response or {}).get(self._weather_entity_id) or {}
+        hours = [
+            parsed
+            for item in entry.get("forecast") or []
+            if (parsed := _parse_forecast_hour(item)) is not None
+        ]
+        self.forecast_available = bool(hours)
+        return hours or None
 
     async def _fetch_local_samples(
         self,
@@ -247,6 +294,30 @@ def _forecast_frames(
         and start_ts <= float(picture["timestamp"]) <= end_ts
         and picture.get("radar_url")
     ]
+
+
+def _parse_forecast_hour(item: Any) -> ForecastHour | None:
+    """Convert one `weather.get_forecasts` entry, or None if it is unusable."""
+    if not isinstance(item, dict):
+        return None
+    try:
+        start = datetime.fromisoformat(str(item["datetime"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+
+    def _number(key: str) -> float | None:
+        value = item.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    return ForecastHour(
+        start=start,
+        precipitation_mm=_number("precipitation"),
+        probability_percent=_number("precipitation_probability"),
+    )
 
 
 def _manifest_generated_at(manifest: dict[str, Any]) -> datetime | None:
