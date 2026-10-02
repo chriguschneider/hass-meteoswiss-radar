@@ -807,3 +807,131 @@ def test_async_update_data_adaptive_second_pass_reruns_evaluate() -> None:
     # All five async_get_json calls were made (versions + manifest + 3 frames)
     assert proxy.async_get_json.call_count == 5
     assert result.status == RainStatus.ACTIVE
+
+
+# ---------------------------------------------------------------------------
+# Tests: reading the hourly forecast off a weather entity (ADR-0010)
+# ---------------------------------------------------------------------------
+
+def _forecast_coordinator(
+    entity_id: str | None, response: object = None, raises: Exception | None = None
+) -> MeteoSwissRadarNowcastCoordinator:
+    """A coordinator whose `weather.get_forecasts` call is scripted."""
+    hass = MagicMock()
+
+    async def _executor(fn, *args):  # noqa: ANN001
+        return fn(*args)
+
+    hass.async_add_executor_job = _executor
+
+    async def _call(domain, service, data, **kwargs):  # noqa: ANN001
+        assert (domain, service) == ("weather", "get_forecasts")
+        assert kwargs["return_response"] is True
+        if raises is not None:
+            raise raises
+        return response
+
+    hass.services.async_call = _call
+    return MeteoSwissRadarNowcastCoordinator(
+        hass, MagicMock(), 46.95, 7.44, weather_entity_id=entity_id
+    )
+
+
+def _forecast_response(entity_id: str, forecast: list) -> dict:
+    return {entity_id: {"forecast": forecast}}
+
+
+def test_forecast_hours_are_parsed_from_the_service_response() -> None:
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(
+        entity,
+        _forecast_response(
+            entity,
+            [
+                {
+                    "datetime": "2026-10-01T15:00:00+00:00",
+                    "precipitation": 0.3,
+                    "precipitation_probability": 59,
+                }
+            ],
+        ),
+    )
+
+    hours = _run(coordinator._async_forecast_hours())
+
+    assert len(hours) == 1
+    assert hours[0].precipitation_mm == 0.3
+    assert hours[0].probability_percent == 59
+    assert coordinator.forecast_available is True
+
+
+def test_no_weather_entity_means_no_forecast() -> None:
+    """Not configured is not the same as "no rain" -- it must stay unknown."""
+    coordinator = _forecast_coordinator(None)
+
+    assert _run(coordinator._async_forecast_hours()) is None
+    assert coordinator.forecast_available is None
+
+
+def test_a_failing_weather_entity_does_not_break_the_radar_update() -> None:
+    """A weather integration that is slow to start must not fail our update."""
+    coordinator = _forecast_coordinator(
+        "weather.home", raises=RuntimeError("entity not found")
+    )
+
+    assert _run(coordinator._async_forecast_hours()) is None
+    assert coordinator.forecast_available is False
+
+
+def test_an_empty_forecast_reads_as_unavailable() -> None:
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(entity, _forecast_response(entity, []))
+
+    assert _run(coordinator._async_forecast_hours()) is None
+    assert coordinator.forecast_available is False
+
+
+def test_unusable_forecast_entries_are_dropped() -> None:
+    """Daily-only forecasts and partial entries must not pass the thresholds."""
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(
+        entity,
+        _forecast_response(
+            entity,
+            [
+                "not a dict",
+                {"precipitation": 1.0},  # no datetime
+                {"datetime": "nonsense", "precipitation": 1.0},
+                {
+                    "datetime": "2026-10-01T15:00:00+00:00",
+                    "precipitation": True,  # a bool is not a measurement
+                    "precipitation_probability": 90,
+                },
+            ],
+        ),
+    )
+
+    hours = _run(coordinator._async_forecast_hours())
+
+    assert len(hours) == 1
+    assert hours[0].precipitation_mm is None
+
+
+def test_a_naive_forecast_datetime_is_read_as_utc() -> None:
+    """Comparing a naive datetime against an aware `now` would raise."""
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(
+        entity,
+        _forecast_response(
+            entity,
+            [{
+                "datetime": "2026-10-01T15:00:00",
+                "precipitation": 0.5,
+                "precipitation_probability": 70,
+            }],
+        ),
+    )
+
+    hours = _run(coordinator._async_forecast_hours())
+
+    assert hours[0].start.tzinfo is not None
