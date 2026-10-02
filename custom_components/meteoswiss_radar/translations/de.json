@@ -26,7 +26,13 @@
   "entity": {
     "sensor": {
       "nowcast_status": {
-        "name": "Regen-Nowcast Status"
+        "name": "Regen-Nowcast Status",
+        "state": {
+          "dry": "Trocken",
+          "approaching": "Regen zieht auf",
+          "active": "Es regnet",
+          "unknown": "Keine Daten"
+        }
       },
       "rain_in": {
         "name": "Regen in"

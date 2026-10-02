@@ -44,6 +44,39 @@ The IDs above are the English defaults. Entity names are translated by Home
 Assistant, so the actual IDs depend on the language active when the entities
 were first created and on what the entity registry already held.
 
+## A one-line summary on the dashboard
+
+The entities deliberately hold data, not sentences: `Rain in` is a duration and
+`Rain start` a timestamp, so neither can say "no rain" — Home Assistant has only
+`unknown` for an empty value there. The status sensor is the one that carries the
+meaning, and it is translated.
+
+For a single readable line, a markdown card assembles one from the attributes
+that are already there:
+
+```yaml
+type: markdown
+content: >-
+  {% set st = states('sensor.meteoswiss_radar_rain_nowcast_status') %}
+  {% set mins = state_attr('binary_sensor.meteoswiss_radar_rain_protection',
+                           'rain_in_minutes') %}
+  {% set until = state_attr('sensor.meteoswiss_radar_rain_nowcast_status',
+                            'event_end') %}
+  {% if st == 'active' %}
+    It is raining{% if until %} until about {{ until | as_timestamp
+      | timestamp_custom('%H:%M') }}{% endif %}.
+  {% elif st == 'approaching' %}
+    Rain in about {{ mins }} minutes.
+  {% elif st == 'dry' %}
+    No rain in the next 30 minutes.
+  {% else %}
+    No radar data at the moment.
+  {% endif %}
+```
+
+Adjust the entity IDs to yours — they follow the language that was active when
+the entities were first created.
+
 ## Event behaviour
 
 Rain protection starts when precipitation is measured at the Home Assistant

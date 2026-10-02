@@ -26,7 +26,13 @@
   "entity": {
     "sensor": {
       "nowcast_status": {
-        "name": "État de la prévision immédiate de pluie"
+        "name": "État de la prévision immédiate de pluie",
+        "state": {
+          "dry": "Sec",
+          "approaching": "Pluie en approche",
+          "active": "Il pleut",
+          "unknown": "Aucune donnée"
+        }
       },
       "rain_in": {
         "name": "Pluie dans"

@@ -6,6 +6,8 @@ sys.modules is patched by importing stubs_ha before importing the component.
 
 from __future__ import annotations
 
+import json
+import pathlib
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -257,3 +259,46 @@ def test_handle_coordinator_update_refreshes_value() -> None:
     coordinator.data = _make_nowcast(status=RainStatus.ACTIVE)
     sensor._handle_coordinator_update()
     assert sensor._attr_native_value == "active"
+
+
+# ---------------------------------------------------------------------------
+# Tests: the status sensor is a translatable enum
+# ---------------------------------------------------------------------------
+
+def test_status_sensor_options_cover_every_rain_status() -> None:
+    """A state missing from `options` is rejected by HA as an invalid enum value.
+
+    The options list is derived from RainStatus, so this guards the pairing: a
+    new status that is not also a translated state would ship as a raw slug.
+    """
+    description = next(d for d in SENSORS if d.key == "nowcast_status")
+
+    assert str(description.device_class) == "enum"
+    assert set(description.options) == {s.value for s in RainStatus}
+
+
+def test_status_sensor_states_are_translated_in_every_language() -> None:
+    """Every status needs a `state` entry in strings.json and all translations.
+
+    Without it the frontend falls back to the raw slug, which is what this repo
+    shipped before: `dry` in German, French and Italian alike.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    base = root / "custom_components" / "meteoswiss_radar"
+    expected = {s.value for s in RainStatus}
+
+    for name in ("strings.json", *(f"translations/{lang}.json"
+                                   for lang in ("de", "en", "fr", "it"))):
+        payload = json.loads((base / name).read_text(encoding="utf-8"))
+        states = payload["entity"]["sensor"]["nowcast_status"].get("state", {})
+        assert set(states) == expected, f"{name} is missing status translations"
+        assert all(
+            text.strip() for text in states.values()
+        ), f"{name} has an empty state"
+
+
+def test_rain_in_has_no_state_class() -> None:
+    """Long-term statistics over a countdown that is mostly unknown is noise."""
+    description = next(d for d in SENSORS if d.key == "rain_in")
+
+    assert description.state_class is None
