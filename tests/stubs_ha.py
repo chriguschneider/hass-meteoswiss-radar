@@ -92,6 +92,18 @@ class _ConfigFlow:
         super().__init_subclass__(**kwargs)
 
 
+def _async_redact_data(data, to_redact):  # noqa: ANN001, ANN201
+    """Same contract as homeassistant.components.diagnostics.async_redact_data."""
+    if isinstance(data, list):
+        return [_async_redact_data(item, to_redact) for item in data]
+    if not isinstance(data, dict):
+        return data
+    return {
+        key: "**REDACTED**" if key in to_redact else _async_redact_data(value, to_redact)
+        for key, value in data.items()
+    }
+
+
 # ---------------------------------------------------------------------------
 # HA update coordinator stubs
 # ---------------------------------------------------------------------------
@@ -197,6 +209,9 @@ def _make_stubs() -> dict[str, ModuleType]:
     ha_frontend.add_extra_js_url = lambda *a, **kw: None  # type: ignore[attr-defined]
     ha_frontend.remove_extra_js_url = lambda *a, **kw: None  # type: ignore[attr-defined]
 
+    ha_diag = ModuleType("homeassistant.components.diagnostics")
+    ha_diag.async_redact_data = _async_redact_data  # type: ignore[attr-defined]
+
     ha_sensor = ModuleType("homeassistant.components.sensor")
     ha_sensor.SensorDeviceClass = _SensorDeviceClass  # type: ignore[attr-defined]
     ha_sensor.SensorEntity = _SensorEntity  # type: ignore[attr-defined]
@@ -234,6 +249,7 @@ def _make_stubs() -> dict[str, ModuleType]:
         "homeassistant.components": ha_comp,
         "homeassistant.components.http": ha_http,
         "homeassistant.components.frontend": ha_frontend,
+        "homeassistant.components.diagnostics": ha_diag,
         "homeassistant.components.sensor": ha_sensor,
         "homeassistant.components.binary_sensor": ha_binary,
         "homeassistant.const": ha_const,

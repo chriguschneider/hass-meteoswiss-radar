@@ -8,6 +8,14 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- Diagnostics download (Settings → Devices & services → MeteoSwiss Radar → ⋮
+  → Download diagnostics): attach it to a bug report instead of pasting logs.
+  It holds the integration version, the options, whether the local nowcast is
+  enabled and the nowcast's last state. Your home location, zone and any URLs
+  are redacted. Requires restart
+
 ## [v0.15.0] — 2026-09-21
 
 ### Added
