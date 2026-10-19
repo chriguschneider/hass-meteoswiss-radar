@@ -99,7 +99,9 @@ def _async_redact_data(data, to_redact):  # noqa: ANN001, ANN201
     if not isinstance(data, dict):
         return data
     return {
-        key: "**REDACTED**" if key in to_redact else _async_redact_data(value, to_redact)
+        key: "**REDACTED**"
+        if key in to_redact
+        else _async_redact_data(value, to_redact)
         for key, value in data.items()
     }
 
