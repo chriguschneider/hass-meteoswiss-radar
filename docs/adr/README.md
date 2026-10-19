@@ -11,6 +11,9 @@ Write an ADR when a change:
 - alters the **proxy allowlist** or the security boundary of the proxy,
 - changes **how the card is built or shipped** (a bundler, a module
   split, a new asset pipeline),
+- adds a **new upstream endpoint, dataset, host or runtime dependency**,
+- changes a **budget** (request cadence, traffic, cache size, ...),
+- adds a **platform**, a **public config/option key** or a public API,
 - adds or moves a **quality gate** (a CI job, a lint rule, a coverage
   floor),
 - introduces a **new architectural pattern** or breaks a module boundary,
@@ -24,7 +27,22 @@ added test coverage, and prose/style tweaks.
 1. Copy [`template.md`](template.md) to `NNNN-short-slug.md` (next free
    number).
 2. Fill in Context, Decision, Consequences. Keep it to a screen.
-3. Land it in the same PR as the code it describes.
+3. Land it in the same PR as the code it describes, and add it to the
+   index below.
+
+## Changing an accepted ADR
+
+Do not rewrite it. Append a section and keep the original text:
+
+```
+## Amendment YYYY-MM-DD (#issue)
+
+What changed and why. Decided by: <owner | ADR-NNNN>.
+```
+
+A decision that reverses the ADR gets a new ADR, and the old one's status
+becomes `Superseded by ADR-NNNN`. (Older ADRs here use `## Update
+YYYY-MM-DD` headings for the same thing; they stay as they are.)
 
 ## Index
 

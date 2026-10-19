@@ -1,19 +1,40 @@
 version: 2
 updates:
+  # Actions are pinned by commit SHA with a version comment; Dependabot bumps
+  # both. The cooldown lets a compromised release surface before it lands
+  # here (tj-actions, 2025). claude-code-action is exempt: its releases carry
+  # security fixes for the agent workflows and should arrive at once.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      exclude:
+        - "anthropics/claude-code-action"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(ci)"
       include: "scope"
 
+  # Card test tooling only (vitest). Nothing from npm ships: the card is a
+  # hand-written file with no build step (ADR-0002). No pip entry: CI
+  # installs ruff and pytest unpinned, there is no requirements file to bump.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
     allow:
-      - dependency-type: "dev"
+      - dependency-type: "development"

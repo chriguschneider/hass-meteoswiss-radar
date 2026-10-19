@@ -56,3 +56,15 @@ are **valid decode results**. The smoke test asserts only that:
 Coordinate-bounds validation (`GEOM_VALIDATION`) runs **only when areas are present**
 (non-empty frames). This avoids false-positive failures during seasonal droughts.
 
+## Amendment 2026-10-19 (repo-standard adoption)
+
+The drift issue keeps its title ("Upstream API format drift detected")
+and is labelled `tracking` plus `area-integration` instead of `bug`.
+`tracking` is the label every agent flow skips (the autopilot's issue
+picker excludes it), which states the original intent, "a human triages
+this, the autopilot cannot fix MeteoSwiss changing their API", in a way
+the automation enforces rather than relying on the missing P-label alone.
+If the label does not exist yet the issue is opened without labels rather
+than not at all.
+
+Decided by: owner.

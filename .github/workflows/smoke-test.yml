@@ -6,7 +6,9 @@ name: Upstream smoke test
 # a user whose card stopped drawing. This job is the tripwire.
 #
 # Deliberately NOT part of PR checks: upstream drift is not a regression in
-# a pull request, and an upstream outage must not block development.
+# a pull request, and an upstream outage must not block development. A
+# failure opens (or comments on) ONE issue labelled `tracking`, never a
+# P-label, so no agent and no autopilot works it; a human triages it.
 
 on:
   schedule:
@@ -15,8 +17,7 @@ on:
     - cron: "0 2 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: smoke-test
@@ -29,10 +30,15 @@ jobs:
     permissions:
       contents: read
       issues: write
+    env:
+      TITLE: "Upstream API format drift detected"
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -57,8 +63,6 @@ jobs:
         if: steps.smoke.outputs.exit_code != '0'
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: "Upstream API format drift detected"
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           # Keep the issue readable: the tail carries the failure summary the
@@ -79,41 +83,43 @@ jobs:
             echo "Check FORMAT.md against what the API actually returns before touching the decoder."
           } > body.md
 
-          existing="$(gh issue list --state open --search "$TITLE in:title" \
-            --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          existing="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')"
 
           if [ -n "$existing" ]; then
             echo "Updating existing issue #$existing"
-            gh issue comment "$existing" --body-file body.md
+            gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body-file body.md
           else
             echo "Opening a new drift issue"
-            # Labelled `bug`/`area-integration` on purpose and NOT with a
-            # P-label: the autopilot grinds the P-backlog, and it cannot fix
-            # MeteoSwiss changing their API. A human triages this one.
-            gh issue create --title "$TITLE" --body-file body.md \
-              --label bug --label area-integration
+            # `tracking`, NOT a P-label: the autopilot grinds the P-backlog
+            # and skips `tracking`, and it cannot fix MeteoSwiss changing
+            # their API. A human triages this one. Without the labels the
+            # issue is opened bare rather than not at all.
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body-file body.md \
+              --label tracking --label area-integration \
+              || gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body-file body.md
           fi
 
       - name: Note recovery on an open drift issue
         if: steps.smoke.outputs.exit_code == '0'
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: "Upstream API format drift detected"
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          existing="$(gh issue list --state open --search "$TITLE in:title" \
-            --json number,title --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          existing="$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')"
           if [ -n "$existing" ]; then
             # Deliberately not closed: decoding again does not prove the
             # format is unchanged -- an empty frame decodes fine too. A human
             # confirms and closes.
-            gh issue comment "$existing" --body \
+            gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body \
               "Smoke test passed again on $(date -u +%Y-%m-%d) ($RUN_URL). Left open for a human to confirm the format actually matches FORMAT.md before closing."
           fi
 
       - name: Fail the job if the smoke test failed
         if: steps.smoke.outputs.exit_code != '0'
+        env:
+          EXIT_CODE: ${{ steps.smoke.outputs.exit_code }}
         run: |
-          echo "::error::Smoke test exited ${{ steps.smoke.outputs.exit_code }} -- see the drift issue."
+          echo "::error::Smoke test exited $EXIT_CODE -- see the drift issue."
           exit 1

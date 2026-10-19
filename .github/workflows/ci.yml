@@ -5,12 +5,18 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # Weekly, so tool or upstream drift (a new hassfest rule, a new ruff
+  # release) turns CI red even without commits; ci-watch.yml opens an issue.
+  schedule:
+    - cron: "23 4 * * 1"
 
 permissions:
   contents: read
 
+# The event is part of the group so the weekly run never cancels a push run
+# on master: release.yml needs a green CI run on the tagged commit.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -18,15 +24,19 @@ jobs:
     name: hassfest (HA manifest validation)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: home-assistant/actions/hassfest@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: home-assistant/actions/hassfest@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master (2026-10-19; no recent release)
 
   hacs:
     name: HACS validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hacs/action@main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main (2026-10-19; no recent release)
         with:
           # No `ignore:` here on purpose. HACS default-store inclusion
           # requires this action to pass "without any errors or ignores",
@@ -39,8 +49,10 @@ jobs:
     name: Python lint + metadata tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - run: pip install ruff pytest
@@ -53,8 +65,10 @@ jobs:
     name: Card syntax + decoder tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - run: npm ci
