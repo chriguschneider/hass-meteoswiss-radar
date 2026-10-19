@@ -46,7 +46,7 @@ jobs:
           category: integration
 
   python:
-    name: Python lint + metadata tests
+    name: Python lint + tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +62,7 @@ jobs:
         run: pytest -q
 
   frontend:
-    name: Card syntax + decoder tests
+    name: Card tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
