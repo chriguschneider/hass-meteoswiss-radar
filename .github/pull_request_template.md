@@ -32,9 +32,9 @@ How was this tested?
 
 ## Checklist
 
-- [ ] My code follows the style guidelines
+- [ ] My code follows the conventions in AGENTS.md and the accepted ADRs
 - [ ] I have performed a self-review of my own code
 - [ ] I have commented my code where necessary
-- [ ] I have updated the documentation if applicable
-- [ ] Tests pass (`npm test`, `ruff check`, `pytest`)
+- [ ] I have updated the documentation and CHANGELOG.md if applicable (entry ends with *frontend only (browser reload)* or *requires restart*)
+- [ ] Checks pass locally: `ruff check custom_components tests`, `pytest -q`, `npm run check`, `npm test`
 - [ ] No new warnings are generated

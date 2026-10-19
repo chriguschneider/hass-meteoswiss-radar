@@ -57,3 +57,20 @@ the section is missing.
 - The release workflow itself lives in `.github/workflows/release.yml`,
   which is outside the scope of agent automation (agents may not modify
   `.github/workflows/`). It must be authored and merged by a human.
+
+## Amendment 2026-10-19 (repo-standard adoption)
+
+The release job now also refuses a tag whose commit has no successful
+`ci.yml` run (`gh run list --workflow ci.yml --commit <sha> --status
+success`). In one of the repos repo-standard was distilled from, CI sat
+red on the default branch for 15 days and a release went out on top of it; the version and changelog
+checks above cannot see that. CI also runs weekly, and `ci-watch.yml`
+opens one issue while `master` is red. Practical effect: merge the
+release commit, wait for CI on `master`, then tag. ci.yml's concurrency
+group includes the event, so the weekly run never cancels a push run.
+
+Since v0.14.0 (ADR-0008) the release does ship an asset,
+`meteoswiss_radar.zip`; "no release assets are needed" in decision 3
+above is superseded by that ADR.
+
+Decided by: owner.

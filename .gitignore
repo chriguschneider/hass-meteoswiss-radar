@@ -22,6 +22,6 @@ coverage.xml
 # the brands proxy API serves it from there (see docs/brands-icon.md).
 /build/
 
-# Machine-local Claude notes (shared conventions live in AGENTS.md)
-/CLAUDE.md
+# Machine-local Claude notes (shared conventions: AGENTS.md, via CLAUDE.md)
+CLAUDE.local.md
 .claude/settings.local.json

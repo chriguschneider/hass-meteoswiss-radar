@@ -1,6 +1,6 @@
 ---
 name: documentation-guardian
-description: Proactively suggests an ADR when an architectural change happens in the MeteoSwiss Radar repo, and checks planned changes against existing decisions in docs/adr/. Activate on a proxy allowlist change, a card build/module change, a new quality gate or CI job, a new upstream endpoint, or a deviation from an accepted ADR.
+description: Proactively suggests an ADR when an architectural change happens in the MeteoSwiss Radar repo, and checks planned changes against existing decisions in docs/adr/. Activate on a proxy allowlist change, a card build/module change, a new quality gate or CI job, a new upstream endpoint or dependency, a changed budget, a new platform or public option, the same logic in a second place, or a deviation from an accepted ADR.
 ---
 
 # Documentation Guardian
@@ -23,7 +23,16 @@ When the two disagree, that file wins.
   adds an allowlist pattern, worth a note against ADR-0001.
 - A **new quality gate**: a CI job under `.github/workflows/`, a ruff rule
   promoted, a coverage floor, a new required check.
-- A **new top-level card config option** (public API, hard to remove).
+- A **new top-level card config option** or a **new options-flow key**
+  (public API, hard to remove).
+- A **new platform** or a new runtime dependency (`requirements` in
+  `manifest.json`, a vendored library).
+- A change to a **budget**: request cadence, the nowcast fetch window, the
+  proxy cache size (see `FORMAT.md` for the measured frame sizes).
+- The **same logic in a second language or place** (a parser in Python and
+  in JS, a table in code and in docs): propose one written spec plus a
+  shared golden-fixture test both sides run. The contour decoder already
+  is such a pair (ADR-0009).
 - A **pattern deviation** from an accepted ADR.
 
 ## Skip
@@ -40,5 +49,7 @@ When the two disagree, that file wins.
 2. If it deviates from an accepted ADR, say so and stop for the user.
 3. If it is a genuinely new decision, offer to draft an ADR from
    `docs/adr/template.md` with the next free number, and land it in the
-   same PR as the code.
+   same PR as the code. If it changes an accepted ADR, propose a dated
+   `## Amendment YYYY-MM-DD (#issue)` section instead of editing the
+   decision text (`docs/adr/README.md`, *Changing an accepted ADR*).
 4. Keep proposals rare and load-bearing: an ADR per bug fix is noise.

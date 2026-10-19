@@ -7,8 +7,9 @@ name: Release
 #   - v0.11.0 was tagged before the brand/ folder landed (#84), so the
 #     published release shipped no icon while master claimed it did.
 #
-# The tag is therefore checked against the tree it actually points at, and
-# release notes must already exist in CHANGELOG.md.
+# The tag is therefore checked against the tree it actually points at, the
+# tagged commit must have a green CI run, and release notes must already
+# exist in CHANGELOG.md.
 
 on:
   push:
@@ -16,19 +17,36 @@ on:
 
 permissions:
   contents: write
+  actions: read # check the CI result of the tagged commit
 
 jobs:
   release:
     name: Verify tag and publish release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # The annotated tag object carries the release title (see below),
           # and it is not present in a shallow clone of the commit alone.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      # ADR-0004 (amendment 2026-10-19): a red master must not ship. ci.yml
+      # runs on every push to master, so a merged commit has a run once CI
+      # has finished; tag it after that run is green.
+      - name: CI passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)"
+          if [ "$ok" = "0" ]; then
+            echo "::error::No green CI run (ci.yml) for $GITHUB_SHA. Tag a commit that passed CI on master."
+            exit 1
+          fi
+
+      # No pip cache on purpose: a release must not restore a cache an
+      # earlier, less trusted job could have written.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -57,10 +75,11 @@ jobs:
       - name: Refuse to overwrite an existing release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "::error::A release for ${{ steps.version.outputs.tag }} already exists. Delete it first, or tag a new version."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A release for $TAG already exists. Delete it first, or tag a new version."
             exit 1
           fi
 
@@ -116,14 +135,15 @@ jobs:
         id: title
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
-          object_type="$(gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq '.object.type')"
+          tag="$TAG"
+          object_type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.type')"
           subject=""
           if [ "$object_type" = "tag" ]; then
-            object_sha="$(gh api "repos/${{ github.repository }}/git/ref/tags/$tag" --jq '.object.sha')"
-            subject="$(gh api "repos/${{ github.repository }}/git/tags/$object_sha" --jq '.message' | head -1)"
+            object_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha')"
+            subject="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha" --jq '.message' | head -1)"
           fi
           # Tolerate a message that already repeats the tag, so
           # `-m "v0.13.0 — foo"` yields one "v0.13.0 —", not two.
@@ -187,9 +207,11 @@ jobs:
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.title.outputs.title }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.title.outputs.title }}" \
+          gh release create "$TAG" \
+            --title "$TITLE" \
             --notes-file release-notes.md \
             --verify-tag \
             meteoswiss_radar.zip

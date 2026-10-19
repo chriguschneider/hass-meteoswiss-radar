@@ -3,20 +3,25 @@
 #
 # Only issues carrying a P-label are eligible (so tests/CI/tracking issues
 # without one are left for a human). Skips: the tracking issue, and issues
-# already flagged `agent:go`, `agent:in-progress` or `needs-verification`.
+# already flagged `agent:go`, `agent:in-progress`, `needs-verification` or
+# `tracking`.
+# Only issues written by the repo owner: the issue text becomes the agent's
+# task, and nobody reviews it before the autopilot acts (prompt injection).
 # Lowest number first within a priority.
 #
 # Prints `number=<n>` (empty if nothing eligible) on stdout.
 set -euo pipefail
 
+owner="$(gh repo view --json owner --jq .owner.login)"
 issues="$(gh issue list --state open --limit 100 \
-  --json number,title,labels,assignees)"
+  --json number,title,labels,assignees,author)"
 
 pick() {
   local prio="$1"
-  printf '%s' "$issues" | jq -r --arg prio "$prio" '
-    map(select(.assignees | length == 0))
-    | map(select([.labels[].name] | any(. == "agent:in-progress" or . == "agent:go" or . == "needs-verification") | not))
+  printf '%s' "$issues" | jq -r --arg prio "$prio" --arg owner "$owner" '
+    map(select(.author.login == $owner))
+    | map(select(.assignees | length == 0))
+    | map(select([.labels[].name] | any(. == "agent:in-progress" or . == "agent:go" or . == "needs-verification" or . == "tracking") | not))
     | map(select(.title | test("^Tracking:") | not))
     | map(select([.labels[].name] | index($prio)))
     | sort_by(.number)
