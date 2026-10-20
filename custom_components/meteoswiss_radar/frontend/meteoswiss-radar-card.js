@@ -962,7 +962,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     root.innerHTML = `
       <link rel="stylesheet" href="${FRONTEND_BASE}/vendor/${CARD_VERSION}/leaflet.css">
       <style>
-        ha-card { overflow: hidden; }
+        ha-card { overflow: hidden; isolation: isolate; }
         .wrap { position: relative; }
         #map {
           height: var(--msr-map-height, ${height}px); width: 100%;
