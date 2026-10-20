@@ -962,7 +962,9 @@ class MeteoSwissRadarCard extends HTMLElement {
     root.innerHTML = `
       <link rel="stylesheet" href="${FRONTEND_BASE}/vendor/${CARD_VERSION}/leaflet.css">
       <style>
-        ha-card { overflow: hidden; }
+        /* isolation keeps Leaflet's z-index 100-1000 panes and our overlays
+           inside the card, so a pop-up backdrop dims the whole card. */
+        ha-card { overflow: hidden; isolation: isolate; }
         .wrap { position: relative; }
         #map {
           height: var(--msr-map-height, ${height}px); width: 100%;

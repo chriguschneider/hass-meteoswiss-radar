@@ -3854,3 +3854,63 @@ describe("card localisation (forum feedback)", () => {
     expect(card._labelL1.textContent).toMatch(/^lun/);
   });
 });
+
+describe("card stacking context (issue #232)", () => {
+  // Leaflet panes and the card's overlays use z-index up to 1000. Without a
+  // stacking context on <ha-card> they escape the card and sit above a
+  // pop-up backdrop, so the map stays bright while the rest is dimmed.
+  it("renders ha-card with isolation: isolate so overlays stay inside the card", () => {
+    const src = readFileSync(cardPath, "utf8");
+    const noop = () => {};
+    const registry = { get: () => undefined, define: noop, whenDefined: () => Promise.resolve() };
+    const ctx = {
+      window: { customElements: registry, customCards: [], L: undefined },
+      document: { querySelector: () => null, readyState: "complete", addEventListener: noop },
+      customElements: registry,
+      HTMLElement: class {},
+      CustomEvent: class {},
+      console: { info: noop, warn: noop, error: noop },
+      setTimeout,
+      clearTimeout,
+      Promise,
+      Date,
+      Math,
+      Array,
+      Object,
+      Number,
+      String,
+      Map,
+      Set,
+      JSON,
+      Intl,
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(`${src}\n;globalThis.__card = { MeteoSwissRadarCard };`, ctx, {
+      filename: cardPath,
+    });
+    const Card = ctx.__card.MeteoSwissRadarCard;
+
+    // Stub shadow root: record the markup, hand back inert elements for lookups.
+    const stubEl = () => ({
+      style: {},
+      textContent: "",
+      hidden: false,
+      addEventListener: noop,
+      appendChild: noop,
+      setAttribute: noop,
+      removeAttribute: noop,
+      classList: { add: noop, remove: noop, toggle: noop },
+    });
+    const root = { innerHTML: "", getElementById: () => stubEl() };
+    const card = new Card();
+    card.attachShadow = () => root;
+    card._config = { height: 400 };
+    card._lang = "en";
+    card._renderShell();
+
+    const haCardRule = root.innerHTML.match(/ha-card\s*\{([^}]*)\}/);
+    expect(haCardRule).not.toBeNull();
+    expect(haCardRule[1]).toMatch(/isolation:\s*isolate/);
+  });
+});
