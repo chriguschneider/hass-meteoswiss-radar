@@ -592,17 +592,18 @@ describe("stacking context keeps Leaflet panes under pop-up backdrops (issue #23
     // the page's pop-up backdrop and the map stays bright while the rest dims.
     const card = new MeteoSwissRadarCard();
     card.setConfig({});
-    let html = "";
-    card.attachShadow = () => ({
-      set innerHTML(v) {
-        html = v;
-      },
-      get innerHTML() {
-        return html;
-      },
-    });
+    // Only innerHTML matters here; every element _renderShell looks up gets a
+    // no-op stand-in so the wiring after the template runs without a DOM.
+    const el = {
+      style: {},
+      hidden: false,
+      addEventListener() {},
+      getBoundingClientRect: () => ({ left: 0, width: 1, top: 0, height: 0 }),
+    };
+    const root = { innerHTML: "", getElementById: () => el };
+    card.attachShadow = () => root;
     card._renderShell();
-    expect(html).toMatch(/ha-card\s*\{[^}]*isolation:\s*isolate;[^}]*\}/);
+    expect(root.innerHTML).toMatch(/ha-card\s*\{[^}]*isolation:\s*isolate;[^}]*\}/);
   });
 });
 
