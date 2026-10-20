@@ -30,6 +30,11 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      # Packages released in lockstep (vitest and its plugins pin each other
+      # as peers): one PR for all of them, also for majors, or every
+      # single-package PR fails with ERESOLVE (#221/#222).
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
       npm-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
