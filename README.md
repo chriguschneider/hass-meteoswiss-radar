@@ -149,8 +149,8 @@ hass-meteoswiss-weather ──(weather entity · station sensors · zero-degree 
 | When rain is next expected | This integration | Nowcast on; weather entity = MeteoSwiss Weather with its hourly forecast on; in weather-station-card `sensors.next_rain` |
 | Forecast, measured values, snow line | MeteoSwiss Weather | Shown by weather-station-card |
 
-Forum thread for the weather-station-card:
-<https://community.home-assistant.io/t/1011385>.
+Forum threads: [weather-station-card](https://community.home-assistant.io/t/1011385)
+and [MeteoSwiss Weather](https://community.home-assistant.io/t/meteoswiss-weather-official-swiss-open-data-no-app-api-history-back-to-1980/1029728).
 
 ## How it works
 
