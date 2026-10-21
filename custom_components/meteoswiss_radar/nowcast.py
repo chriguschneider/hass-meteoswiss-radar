@@ -16,6 +16,7 @@ from .nowcast_core import (
     DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
     ForecastHour,
     combine_next_rain,
+    radar_lookahead,
     DEFAULT_WARNING_LEAD_MINUTES,
     RainNowcast,
     RainSample,
@@ -138,10 +139,31 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             protection_min_hold_minutes=self._protection_min_hold_minutes,
         )
 
-        # On a dry day only the short lead window is needed.  Once rain is
-        # approaching/active, extend the fetch so the UI can also estimate the
-        # event end and bridge short dry interruptions correctly.
-        if raw.status in (RainStatus.APPROACHING, RainStatus.ACTIVE) and later_meta:
+        # The protection signal only ever uses the short lead window.  Once
+        # rain is approaching/active, extend the fetch so the UI can also
+        # estimate the event end and bridge short dry interruptions correctly.
+        # On a dry day the same frames, up to two hours, only answer "next
+        # rain" and are deliberately kept out of evaluate_nowcast.
+        radar_ahead: datetime | None = None
+        radar_until: datetime | None = None
+        if raw.status is RainStatus.DRY:
+            ahead_meta = [
+                meta
+                for meta in later_meta
+                if float(meta["timestamp"]) <= (now + FORECAST_HORIZON).timestamp()
+            ]
+            ahead_samples: list[RainSample] = []
+            if ahead_meta:
+                _, ahead_samples, ahead_failures = await self._fetch_local_samples(
+                    None,
+                    ahead_meta,
+                    legend,
+                )
+                failures += ahead_failures
+            radar_ahead, radar_until = radar_lookahead(
+                [*forecast_samples, *ahead_samples]
+            )
+        elif raw.status in (RainStatus.APPROACHING, RainStatus.ACTIVE) and later_meta:
             _, later_samples, later_failures = await self._fetch_local_samples(
                 None,
                 later_meta,
@@ -158,7 +180,13 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             )
 
         self.frame_failures = failures
-        return combine_next_rain(raw, now, await self._async_forecast_hours())
+        return combine_next_rain(
+            raw,
+            now,
+            await self._async_forecast_hours(),
+            radar_ahead=radar_ahead,
+            radar_until=radar_until,
+        )
 
     async def _async_forecast_hours(self) -> list[ForecastHour] | None:
         """Read the configured weather entity's hourly precipitation forecast.

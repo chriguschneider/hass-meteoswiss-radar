@@ -14,15 +14,34 @@
     "step": {
       "init": {
         "title": "MeteoSwiss Radar options",
+        "description": "The radar card works without any of this. These settings add sensors that predict rain at your home, e.g. to retract an awning automatically.",
         "data": {
-          "nowcast_enabled": "Local rain-nowcast entities",
-          "protection_min_hold_minutes": "Minimum rain-protection hold (minutes)",
-          "weather_entity_id": "Weather entity for the longer forecast"
+          "nowcast_enabled": "Rain sensors for my home"
         },
         "data_description": {
-          "nowcast_enabled": "Evaluates the radar at the Home Assistant location and adds rain-nowcast sensors plus a rain-protection binary sensor for automations. Polls MeteoSwiss every 5 minutes while enabled; leave it off if you only want the card.",
-          "protection_min_hold_minutes": "Once rain protection switches on it stays on for at least this long, even if the radar clears earlier. Prevents a passing shower from cycling whatever the signal drives — typically an awning motor. 0 disables the hold.",
-          "weather_entity_id": "Beyond the radar's own half-hour horizon, 'Next rain' falls back to this entity's hourly forecast — so it can say 'today 17:00' where the radar still sees nothing. Leave empty for radar only."
+          "nowcast_enabled": "Reads the radar at the Home Assistant location every 5 min. \"Next rain\" looks up to 2 h ahead; the \"Rain protection\" switch for automations reacts to rain within 30 min."
+        },
+        "sections": {
+          "rain_protection": {
+            "name": "Rain protection: smooth out flapping",
+            "description": "At the edge of a shower the radar can switch between rain and dry within minutes. This keeps \"Rain protection\" on for a minimum time, so the awning does not move in and out repeatedly.",
+            "data": {
+              "protection_min_hold_minutes": "Minimum on-time"
+            },
+            "data_description": {
+              "protection_min_hold_minutes": "Only affects the \"Rain protection\" switch, not the status sensor. 0 = off as soon as the radar is dry."
+            }
+          },
+          "forecast": {
+            "name": "Next rain beyond 2 hours",
+            "description": "The radar looks 2 hours ahead. After that, \"Next rain\" uses the hourly forecast of a weather entity (from 0.1 mm at 50 % probability).",
+            "data": {
+              "weather_entity_id": "Weather entity for the hourly forecast"
+            },
+            "data_description": {
+              "weather_entity_id": "The sensor shows which source answered: radar or forecast. Empty = radar only."
+            }
+          }
         }
       }
     }

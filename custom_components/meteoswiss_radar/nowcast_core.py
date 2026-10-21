@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from enum import StrEnum
 from math import ceil
 from typing import Any
@@ -91,6 +91,9 @@ class RainNowcast:
     # nowcast horizon, "forecast" beyond it). None when neither sees any.
     next_rain: datetime | None = None
     next_rain_source: str | None = None
+    # End of the last forecast hour that was searched for rain. None when no
+    # forecast was read, so "no rain" then only covers the radar horizon.
+    forecast_until: datetime | None = None
 
 
 def wgs84_to_grid_km(latitude: float, longitude: float) -> tuple[float, float]:
@@ -480,11 +483,33 @@ def next_rain_from_forecast(
     return min(candidates) if candidates else None
 
 
+def radar_lookahead(
+    samples: Iterable[RainSample],
+) -> tuple[datetime | None, datetime | None]:
+    """Scan radar forecast samples past the warning window for "next rain".
+
+    Returns the first wet sample's time, and how far the radar reliably looked:
+    the last sample before the first unknown one. A gap ends the coverage, so a
+    failed frame never reads as "dry up to the horizon".
+    """
+
+    covered_until: datetime | None = None
+    for sample in sorted(samples, key=lambda item: item.timestamp):
+        if sample.wet is None:
+            break
+        if sample.wet:
+            return sample.timestamp, covered_until
+        covered_until = sample.timestamp
+    return None, covered_until
+
+
 def combine_next_rain(
     result: RainNowcast,
     now: datetime,
     forecast_hours: Iterable[ForecastHour] | None,
     *,
+    radar_ahead: datetime | None = None,
+    radar_until: datetime | None = None,
     min_mm: float = DEFAULT_FORECAST_RAIN_MM,
     min_probability: float = DEFAULT_FORECAST_RAIN_PROBABILITY,
 ) -> RainNowcast:
@@ -503,15 +528,108 @@ def combine_next_rain(
     if result.status is RainStatus.APPROACHING and result.event_start is not None:
         return replace(result, next_rain=result.event_start, next_rain_source="radar")
 
+    # Past the 30-minute warning window the radar still looks up to two hours
+    # ahead for this display value. It never feeds the protection signal.
+    if radar_ahead is not None:
+        return replace(result, next_rain=radar_ahead, next_rain_source="radar")
+
     if forecast_hours is None:
         return result
 
+    hours = list(forecast_hours)
+    forecast_until = (
+        max(hour.start for hour in hours) + timedelta(hours=1) if hours else None
+    )
+    # Inside what the radar has seen to be dry, the radar wins: only hours that
+    # start after its coverage may announce rain.
     upcoming = next_rain_from_forecast(
-        forecast_hours, now, min_mm=min_mm, min_probability=min_probability
+        hours,
+        max(now, radar_until) if radar_until is not None else now,
+        min_mm=min_mm,
+        min_probability=min_probability,
     )
     if upcoming is None:
-        return result
-    return replace(result, next_rain=upcoming, next_rain_source="forecast")
+        return replace(result, forecast_until=forecast_until)
+    return replace(
+        result,
+        next_rain=upcoming,
+        next_rain_source="forecast",
+        forecast_until=forecast_until,
+    )
+
+
+# Display strings for `next_rain_text`. Kept here rather than in the entity
+# translations because HA only translates fixed enum states, and the point of
+# this sensor is a value like "17:00" that no enum can hold.
+_NEXT_RAIN_TEXT: dict[str, dict[str, Any]] = {
+    "en": {
+        "now": "Now",
+        "minutes": "{} min",
+        "none": "No rain",
+        "no_data": "No data",
+        "weekdays": ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"),
+    },
+    "de": {
+        "now": "Jetzt",
+        "minutes": "{} Min.",
+        "none": "Kein Regen",
+        "no_data": "Keine Daten",
+        "weekdays": ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"),
+    },
+    "fr": {
+        "now": "Maintenant",
+        "minutes": "{} min",
+        "none": "Pas de pluie",
+        "no_data": "Aucune donnée",
+        "weekdays": ("lu", "ma", "me", "je", "ve", "sa", "di"),
+    },
+    "it": {
+        "now": "Ora",
+        "minutes": "{} min",
+        "none": "Niente pioggia",
+        "no_data": "Nessun dato",
+        "weekdays": ("lu", "ma", "me", "gi", "ve", "sa", "do"),
+    },
+}
+
+# Below an hour a countdown reads best ("45 min"); beyond it a clock time.
+NEXT_RAIN_MINUTES_ONLY = timedelta(hours=1)
+# Inside this distance a bare "17:00" is unambiguous: it is the next 17:00.
+NEXT_RAIN_CLOCK_ONLY = timedelta(hours=24)
+
+
+def next_rain_text(
+    result: RainNowcast, now: datetime, tz: tzinfo, language: str | None
+) -> str:
+    """Return the short line the "Next rain" sensor shows.
+
+    Kept deliberately terse for a device page or tile: "Now", "12 min" under
+    an hour, "17:00" within a day, "Mo 14:00" beyond it, otherwise "No rain". The
+    timestamp itself stays available as an attribute for automations.
+    """
+
+    lang = (language or "en").split("-")[0].lower()
+    text = _NEXT_RAIN_TEXT.get(lang, _NEXT_RAIN_TEXT["en"])
+
+    if result.status is RainStatus.ACTIVE:
+        return text["now"]
+    if result.next_rain is None:
+        if result.status is RainStatus.UNKNOWN:
+            return text["no_data"]
+        return text["none"]
+
+    delta = result.next_rain - now
+    if result.next_rain_source == "radar" and delta < NEXT_RAIN_MINUTES_ONLY:
+        minutes = result.lead_time_minutes
+        if minutes is None:
+            minutes = max(0, ceil(delta.total_seconds() / 60))
+        return text["now"] if minutes <= 0 else text["minutes"].format(minutes)
+
+    local = result.next_rain.astimezone(tz)
+    clock = local.strftime("%H:%M")
+    if delta <= NEXT_RAIN_CLOCK_ONLY:
+        return clock
+    return f"{text['weekdays'][local.weekday()]} {clock}"
 
 
 def _apply_protection_hold(

@@ -174,6 +174,7 @@ class _SensorEntityDescription:
     device_class: object = None
     state_class: object = None
     native_unit_of_measurement: object = None
+    entity_registry_enabled_default: bool = True
     # ENUM sensors carry their allowed states here; HA rejects a state that is
     # not listed, which is what makes the status sensor's values translatable.
     options: object = None
