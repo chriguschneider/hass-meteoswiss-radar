@@ -16,6 +16,11 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   enabled and the nowcast's last state. Your home location, zone and any URLs
   are redacted. Requires restart
 
+### Fixed
+
+- The radar map is now dimmed with the rest of the dashboard when a pop-up
+  opens (e.g. a Bubble Card pop-up). Frontend only (browser reload)
+
 ## [v0.15.0] — 2026-09-21
 
 ### Added

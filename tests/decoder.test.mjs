@@ -586,6 +586,27 @@ describe("first-frame failure recovery (issue #5)", () => {
   });
 });
 
+describe("stacking context keeps Leaflet panes under pop-up backdrops (issue #232)", () => {
+  it("the card's ha-card creates its own stacking context", () => {
+    // Leaflet panes use z-index 100-1000; without isolation they compete with
+    // the page's pop-up backdrop and the map stays bright while the rest dims.
+    const card = new MeteoSwissRadarCard();
+    card.setConfig({});
+    // Only innerHTML matters here; every element _renderShell looks up gets a
+    // no-op stand-in so the wiring after the template runs without a DOM.
+    const el = {
+      style: {},
+      hidden: false,
+      addEventListener() {},
+      getBoundingClientRect: () => ({ left: 0, width: 1, top: 0, height: 0 }),
+    };
+    const root = { innerHTML: "", getElementById: () => el };
+    card.attachShadow = () => root;
+    card._renderShell();
+    expect(root.innerHTML).toMatch(/ha-card\s*\{[^}]*isolation:\s*isolate;[^}]*\}/);
+  });
+});
+
 describe("editor prunes default values from config (issue #4)", () => {
   // A bare editor is enough: _emit touches only _config plus the two
   // side-effects we stub (form refresh + the config-changed dispatch).
