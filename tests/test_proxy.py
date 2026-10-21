@@ -11,7 +11,7 @@ import asyncio
 import pathlib
 import sys
 from contextlib import asynccontextmanager
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -158,6 +158,19 @@ def _make_stubs() -> dict[str, ModuleType]:
 
     ha_sel.EntitySelector = _EntitySelector  # type: ignore[attr-defined]
     ha_sel.EntitySelectorConfig = _EntitySelectorConfig  # type: ignore[attr-defined]
+    ha_sel.NumberSelector = _EntitySelector  # type: ignore[attr-defined]
+    ha_sel.NumberSelectorConfig = _EntitySelectorConfig  # type: ignore[attr-defined]
+    ha_sel.NumberSelectorMode = SimpleNamespace(BOX="box", SLIDER="slider")  # type: ignore[attr-defined]
+
+    # `section` wraps a nested schema; the stub keeps it inspectable.
+    ha_flow = ModuleType("homeassistant.data_entry_flow")
+
+    class _Section:
+        def __init__(self, schema: object, options: object = None) -> None:
+            self.schema = schema
+            self.options = options
+
+    ha_flow.section = _Section  # type: ignore[attr-defined]
 
     ha_er = ModuleType("homeassistant.helpers.entity_registry")
     ha_er.entries = []  # type: ignore[attr-defined]
@@ -174,6 +187,7 @@ def _make_stubs() -> dict[str, ModuleType]:
         "homeassistant.components.http": ha_http,
         "homeassistant.config_entries": ha_cfg,
         "homeassistant.core": ha_core,
+        "homeassistant.data_entry_flow": ha_flow,
         "homeassistant.helpers": ha_helpers,
         "homeassistant.helpers.aiohttp_client": ha_client,
         "homeassistant.helpers.entity_registry": ha_er,
@@ -204,6 +218,10 @@ _FakeFileResponse = _FakeWeb.FileResponse
 for _mod_name, _attrs in (
     ("homeassistant.config_entries", ("OptionsFlow",)),
     ("homeassistant.core", ("callback",)),
+    (
+        "homeassistant.helpers.selector",
+        ("NumberSelector", "NumberSelectorConfig", "NumberSelectorMode"),
+    ),
 ):
     _registered = sys.modules[_mod_name]
     for _attr in _attrs:
@@ -1694,10 +1712,62 @@ def test_options_flow_resolves_entry_via_handler() -> None:
     assert result["step_id"] == "init"
     # The Required markers carry the defaults the dialog will preselect. Looked
     # up by key rather than unpacked, so adding an option does not break this.
-    markers = {marker.key: marker for marker in result["data_schema"]}
+    schema = result["data_schema"]
+    markers = {marker.key: marker for marker in schema}
+    # Sections nest their own schema; flatten one level to reach the fields.
+    for value in schema.values():
+        if hasattr(value, "schema"):
+            markers.update({inner.key: inner for inner in value.schema})
     # The explicit True resolves without touching the registry fallback.
     assert markers["nowcast_enabled"].default is True
     assert markers["protection_min_hold_minutes"].default == 30
+
+
+def test_options_flow_stores_sections_as_flat_options() -> None:
+    """The dialog groups fields in sections, but every reader in __init__ looks
+    up flat keys. The number selector also submits a float, which
+    `protection_min_hold_minutes` would reject in favour of the default.
+    """
+    flow = MeteoSwissRadarOptionsFlow()
+    flow.async_create_entry = lambda **kwargs: kwargs
+
+    result = _run(
+        flow.async_step_init(
+            {
+                "nowcast_enabled": True,
+                "rain_protection": {"protection_min_hold_minutes": 45.0},
+                "forecast": {"weather_entity_id": "weather.home"},
+            }
+        )
+    )
+
+    assert result["data"] == {
+        "nowcast_enabled": True,
+        "protection_min_hold_minutes": 45,
+        "weather_entity_id": "weather.home",
+    }
+    assert type(result["data"]["protection_min_hold_minutes"]) is int
+    entry = _entry_with_options(result["data"])
+    assert _integration.protection_min_hold_minutes(entry) == 45
+
+
+def test_options_flow_cleared_weather_entity_means_radar_only() -> None:
+    flow = MeteoSwissRadarOptionsFlow()
+    flow.async_create_entry = lambda **kwargs: kwargs
+
+    result = _run(
+        flow.async_step_init(
+            {
+                "nowcast_enabled": True,
+                "rain_protection": {"protection_min_hold_minutes": 30},
+                "forecast": {},
+            }
+        )
+    )
+
+    assert "weather_entity_id" not in result["data"]
+    entry = _entry_with_options(result["data"])
+    assert _integration.forecast_weather_entity(entry) is None
 
 
 # ---------------------------------------------------------------------------

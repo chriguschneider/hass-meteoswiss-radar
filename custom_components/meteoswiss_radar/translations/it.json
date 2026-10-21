@@ -14,15 +14,34 @@
     "step": {
       "init": {
         "title": "Opzioni MeteoSwiss Radar",
+        "description": "La card radar funziona senza queste impostazioni. Aggiungono sensori che prevedono la pioggia nella tua posizione, ad es. per ritirare automaticamente una tenda da sole.",
         "data": {
-          "nowcast_enabled": "Entità di nowcast della pioggia locale",
-          "protection_min_hold_minutes": "Durata minima della protezione pioggia (minuti)",
-          "weather_entity_id": "Entità meteo per la previsione estesa"
+          "nowcast_enabled": "Sensori di pioggia per la mia posizione"
         },
         "data_description": {
-          "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant e aggiunge sensori di nowcast della pioggia e un sensore binario di protezione dalla pioggia per le automazioni. Interroga MeteoSwiss ogni 5 minuti quando è attiva; lasciala disattivata se vuoi solo la card.",
-          "protection_min_hold_minutes": "Una volta attivata, la protezione pioggia resta attiva almeno per questo tempo, anche se il radar dà prima il cessato allarme. Evita che un rovescio di passaggio faccia ciclare il motore collegato, di solito quello di una tenda. 0 disattiva il mantenimento.",
-          "weather_entity_id": "Oltre la mezz'ora coperta dal radar, «Prossima pioggia» ricade sulla previsione oraria di questa entità — così può indicare «oggi 17:00» dove il radar non vede ancora nulla. Lasciare vuoto per il solo radar."
+          "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant ogni 5 min. «Prossima pioggia» guarda fino a 2 h avanti; l'interruttore «Protezione pioggia» per le automazioni reagisce alla pioggia entro 30 min."
+        },
+        "sections": {
+          "rain_protection": {
+            "name": "Protezione pioggia: smorzare le oscillazioni",
+            "description": "Al margine di un rovescio il radar può passare da pioggia ad asciutto in pochi minuti. Questa impostazione mantiene «Protezione pioggia» attiva per un tempo minimo, così la tenda non entra ed esce più volte.",
+            "data": {
+              "protection_min_hold_minutes": "Durata minima di attivazione"
+            },
+            "data_description": {
+              "protection_min_hold_minutes": "Riguarda solo l'interruttore «Protezione pioggia», non il sensore di stato. 0 = si disattiva appena il radar indica asciutto."
+            }
+          },
+          "forecast": {
+            "name": "Prossima pioggia oltre 2 ore",
+            "description": "Il radar guarda 2 ore avanti. Oltre, «Prossima pioggia» usa la previsione oraria di un'entità meteo (da 0,1 mm con probabilità del 50 %).",
+            "data": {
+              "weather_entity_id": "Entità meteo per la previsione oraria"
+            },
+            "data_description": {
+              "weather_entity_id": "Il sensore indica quale fonte ha risposto: radar o previsione. Vuoto = solo radar."
+            }
+          }
         }
       }
     }

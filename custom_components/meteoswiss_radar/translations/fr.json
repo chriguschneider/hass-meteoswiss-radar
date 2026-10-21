@@ -14,15 +14,34 @@
     "step": {
       "init": {
         "title": "Options MeteoSwiss Radar",
+        "description": "La carte radar fonctionne sans ces réglages. Ils ajoutent des capteurs qui prévoient la pluie à votre emplacement, p. ex. pour rentrer un store automatiquement.",
         "data": {
-          "nowcast_enabled": "Entités de prévision de pluie locale",
-          "protection_min_hold_minutes": "Durée minimale de la protection pluie (minutes)",
-          "weather_entity_id": "Entité météo pour la prévision étendue"
+          "nowcast_enabled": "Capteurs de pluie pour mon emplacement"
         },
         "data_description": {
-          "nowcast_enabled": "Évalue le radar à l'emplacement de Home Assistant et ajoute des capteurs de prévision de pluie ainsi qu'un capteur binaire de protection contre la pluie pour les automatisations. Interroge MeteoSwiss toutes les 5 minutes lorsque l'option est active ; laissez-la désactivée si vous ne voulez que la carte.",
-          "protection_min_hold_minutes": "Une fois activée, la protection pluie reste active au moins ce temps, même si le radar donne la fin d'alerte plus tôt. Évite qu'une averse de passage fasse cycler le moteur raccordé, typiquement celui d'un store. 0 désactive le maintien.",
-          "weather_entity_id": "Au-delà de la demi-heure que couvre le radar, « Prochaine pluie » se rabat sur la prévision horaire de cette entité — elle peut ainsi indiquer « aujourd'hui 17:00 » là où le radar ne voit encore rien. Laisser vide pour n'utiliser que le radar."
+          "nowcast_enabled": "Évalue le radar à l'emplacement de Home Assistant toutes les 5 min. « Prochaine pluie » regarde jusqu'à 2 h à l'avance ; l'interrupteur « Protection pluie » pour les automatisations réagit à la pluie dans les 30 min."
+        },
+        "sections": {
+          "rain_protection": {
+            "name": "Protection pluie : lisser les fluctuations",
+            "description": "En bordure d'une averse, le radar peut passer de pluie à sec en quelques minutes. Ce réglage maintient « Protection pluie » active pendant une durée minimale, pour que le store ne rentre et ne sorte pas à répétition.",
+            "data": {
+              "protection_min_hold_minutes": "Durée minimale d'activation"
+            },
+            "data_description": {
+              "protection_min_hold_minutes": "N'affecte que l'interrupteur « Protection pluie », pas le capteur d'état. 0 = désactivée dès que le radar indique sec."
+            }
+          },
+          "forecast": {
+            "name": "Prochaine pluie au-delà de 2 heures",
+            "description": "Le radar regarde 2 heures à l'avance. Au-delà, « Prochaine pluie » utilise la prévision horaire d'une entité météo (dès 0,1 mm à 50 % de probabilité).",
+            "data": {
+              "weather_entity_id": "Entité météo pour la prévision horaire"
+            },
+            "data_description": {
+              "weather_entity_id": "Le capteur indique quelle source a répondu : radar ou prévision. Vide = radar seul."
+            }
+          }
         }
       }
     }

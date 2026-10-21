@@ -14,15 +14,34 @@
     "step": {
       "init": {
         "title": "MeteoSwiss Radar Optionen",
+        "description": "Die Radarkarte funktioniert ohne diese Einstellungen. Sie ergänzen Sensoren, die Regen an deinem Standort vorhersagen, z. B. um die Markise automatisch einzufahren.",
         "data": {
-          "nowcast_enabled": "Lokale Regen-Nowcast-Entitäten",
-          "protection_min_hold_minutes": "Mindesthaltezeit des Regenschutzes (Minuten)",
-          "weather_entity_id": "Wetter-Entität für die weitere Vorhersage"
+          "nowcast_enabled": "Regensensoren für meinen Standort"
         },
         "data_description": {
-          "nowcast_enabled": "Wertet das Radar am Standort von Home Assistant aus und ergänzt Regen-Nowcast-Sensoren sowie einen binären Regenschutz-Sensor für Automationen. Ruft MeteoSwiss alle 5 Minuten ab, solange aktiviert; deaktiviert lassen, wenn nur die Karte gewünscht ist.",
-          "protection_min_hold_minutes": "Sobald der Regenschutz anspringt, bleibt er mindestens so lange an, auch wenn das Radar früher Entwarnung gibt. Verhindert, dass ein durchziehender Schauer den angeschlossenen Antrieb — meist einen Markisenmotor — hin und her fahren lässt. 0 schaltet die Haltezeit ab.",
-          "weather_entity_id": "Jenseits der halben Stunde, die das Radar überblickt, greift «Nächster Regen» auf die Stundenprognose dieser Entität zurück — so kann dort «heute 17:00» stehen, wo das Radar noch nichts sieht. Leer lassen für reinen Radarbetrieb."
+          "nowcast_enabled": "Wertet das Radar am Home-Assistant-Standort alle 5 Min. aus. «Nächster Regen» schaut bis 2 h voraus; der Schalter «Regenschutz» für Automationen reagiert auf Regen innert 30 Min."
+        },
+        "sections": {
+          "rain_protection": {
+            "name": "Regenschutz: Schwankungen glätten",
+            "description": "Am Rand eines Schauers kann das Radar innert Minuten zwischen Regen und trocken wechseln. Hier bleibt «Regenschutz» mindestens eine gewisse Zeit an, damit die Markise nicht mehrmals ein- und ausfährt.",
+            "data": {
+              "protection_min_hold_minutes": "Mindestdauer eingeschaltet"
+            },
+            "data_description": {
+              "protection_min_hold_minutes": "Betrifft nur den Schalter «Regenschutz», nicht den Status-Sensor. 0 = aus, sobald das Radar trocken meldet."
+            }
+          },
+          "forecast": {
+            "name": "Nächster Regen nach 2 Stunden",
+            "description": "Das Radar schaut 2 Stunden voraus. Danach nutzt «Nächster Regen» die Stundenprognose einer Wetter-Entität (ab 0,1 mm bei 50 % Wahrscheinlichkeit).",
+            "data": {
+              "weather_entity_id": "Wetter-Entität für die Stundenprognose"
+            },
+            "data_description": {
+              "weather_entity_id": "Der Sensor zeigt, welche Quelle geantwortet hat: Radar oder Prognose. Leer = nur Radar."
+            }
+          }
         }
       }
     }

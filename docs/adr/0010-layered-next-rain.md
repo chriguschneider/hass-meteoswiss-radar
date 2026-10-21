@@ -81,3 +81,44 @@ not better. The layering is for the display value only.
   entity and keeps the old one as an orphan until removed.
 - Changes to the thresholds, to the layering order, or to how the forecast is
   obtained should update this ADR.
+
+## Amendment 2026-10-03: `next_rain` shows text, not a timestamp
+
+A timestamp sensor can only say `unknown` when there is nothing to report, and
+with the forecast configured "nothing" is the common case: on 2026-10-03 the
+hourly forecast covered ~62 h without a single rain hour, and the device page
+read `Unknown` — indistinguishable from a broken integration.
+
+`next_rain` therefore became a short **text** sensor: `Now`, `12 min` (under an
+hour), `17:00` (within 24 h, where a bare clock time is unambiguous),
+`Mo 14:00` (beyond), `No rain`, or `No data`. The strings live in
+`nowcast_core` for DE / FR / IT / EN, following the HA system language, because
+entity translations only cover fixed enum states and the point here is a time.
+
+The data moved to attributes: `at` (the timestamp), `source`, and
+`checked_until` (end of the searched forecast), so automations keep the full
+value. The feature was still unreleased, so no published automation depended on
+the timestamp state.
+
+`rain_in` and `expected_dry_from` duplicate what the text now says and read
+`unknown` most of the time; they are **disabled by default** for new installs
+and remain available for automations.
+
+### The radar answers "next rain" up to 2 h, protection stays at 30 min
+
+The radar horizon for `next_rain` moved from the 30-minute warning window to
+**2 hours**. Between half an hour and two hours INCA is the best available
+answer — kilometre cells at the actual location, 5-minute steps — while the
+hourly model is a forecast point by the hour; and two hours is where INCA
+blends into a model itself, so the layering boundary now sits where the
+products actually change. The forecast is consulted only for hours starting
+after what the radar covered as dry, and a failed frame ends that coverage.
+
+The look-ahead frames are kept out of `evaluate_nowcast`: **the protection
+signal stays on the 30-minute window.** It drives an actuator, and advection
+skill at a single point drops fast past half an hour.
+
+Cost: on a dry day the coordinator now fetches ~24 forecast frames instead of
+~6, roughly 0.5 MB instead of 0.1 MB gzipped per 5-minute update. While rain is
+approaching or active it already fetched this range, so nothing changes there.
+

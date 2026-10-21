@@ -45,9 +45,9 @@ Assistant dashboard.
 - **No YAML needed.** There's a visual editor, and the defaults just work.
 - **When MeteoSwiss changes something upstream**, you get a small banner
   instead of a broken map.
-- **Optional rain-nowcast entities** for automations — "is it raining at my
-  house, and is rain due in the next half hour" — off by default, from the same
-  radar data. See [`LOCAL_NOWCAST.md`](LOCAL_NOWCAST.md).
+- **Optional rain sensors for your home** — "is it raining here, and when is
+  the next rain" — off by default, from the same radar data. See
+  [Rain sensors](#rain-sensors-optional) below.
 
 ## Install
 
@@ -68,6 +68,46 @@ is optional and lives in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 Needs Home Assistant **2024.7.0 or newer**. Uninstalling needs a restart,
 because the integration serves the card as a frontend resource.
+
+## Rain sensors (optional)
+
+The card needs none of this. Turn it on if you want Home Assistant to *act* on
+rain at your home — retract the awning, close a skylight, warn before the
+laundry gets wet.
+
+Settings → Devices & services → MeteoSwiss Radar → **Configure**:
+
+<p align="center">
+  <img
+    src="https://raw.githubusercontent.com/chriguschneider/hass-meteoswiss-radar/master/docs/images/options.png"
+    alt="The MeteoSwiss Radar options dialog with the rain-sensor switch, the rain-protection minimum on-time, and the weather entity for the hourly forecast"
+    width="440"
+  />
+</p>
+
+- **Rain sensors for my home** — reads the radar at your Home Assistant
+  location every 5 minutes. *Next rain* looks up to 2 hours ahead; the *Rain
+  protection* switch reacts to rain within 30 minutes.
+- **Rain protection: smooth out flapping** — at the edge of a shower the radar
+  can flip between rain and dry within minutes. The *Rain protection* switch
+  stays on for at least this long, so the awning does not run in and out.
+- **Next rain beyond 2 hours** — past two hours the radar nowcast turns into a
+  weather model anyway. Pick a weather entity and *Next rain* continues with its
+  hourly forecast. [MeteoSwiss Weather](https://github.com/chriguschneider/hass-meteoswiss-weather)
+  fits best: the same MeteoSwiss data, forecast for your postal code.
+
+*Next rain* is kept short enough for a tile:
+
+| Situation | Shows |
+|---|---|
+| Raining now | `Now` |
+| Radar, within the hour | `12 min` |
+| Radar (up to 2 h) or forecast, within 24 h | `17:00` |
+| Forecast, later | `Mo 14:00` |
+| Nothing in radar or forecast | `No rain` |
+
+Details, all entities and automation advice are in
+[`LOCAL_NOWCAST.md`](LOCAL_NOWCAST.md).
 
 ### "Custom element doesn't exist: meteoswiss-radar-card"
 
@@ -98,6 +138,21 @@ frames.** That's how MeteoSwiss publishes it — they don't predict lightning, a
 they don't record precipitation type. So a snow overlay shows nothing while you
 scrub through recorded radar, and lightning vanishes the moment you cross into
 the forecast. The app behaves the same way.
+
+## Works well with
+
+Two sibling projects, built to sit next to this card on the same dashboard:
+
+- **[MeteoSwiss Weather](https://github.com/chriguschneider/hass-meteoswiss-weather)**
+  — a `weather` entity from MeteoSwiss Open Data: current conditions from the
+  nearest SwissMetNet station and the local forecast for your postal code. Pick
+  it as the weather entity above and *Next rain* reaches beyond the radar.
+- **[Weather Station Card](https://github.com/chriguschneider/weather-station-card)**
+  — one chart of what your own weather station measured against what the
+  forecast predicted, today in the middle. Works with plain sensors (Ecowitt,
+  WeatherFlow, ESPHome, Netatmo, …).
+
+The three are independent installs; none needs the others.
 
 ## How it works
 
