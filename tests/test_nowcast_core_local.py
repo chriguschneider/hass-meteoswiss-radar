@@ -6,7 +6,9 @@ import importlib.util
 import json
 import struct
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -735,3 +737,125 @@ def test_incomplete_forecast_entries_are_ignored() -> None:
     )
 
     assert result.next_rain is None
+
+
+# ---------------------------------------------------------------------------
+# next_rain_text: the short line the "Next rain" sensor shows
+# ---------------------------------------------------------------------------
+
+_ZURICH = ZoneInfo("Europe/Zurich")
+# 2026-10-03 10:00 local time (CEST, UTC+2).
+_TEXT_NOW = datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
+
+
+def _text(language: str = "de", **overrides: object) -> str:
+    result = replace(_dry_result(), **overrides)
+    return core.next_rain_text(result, _TEXT_NOW, _ZURICH, language)
+
+
+def test_next_rain_text_while_raining() -> None:
+    assert _text(status=core.RainStatus.ACTIVE, next_rain=_TEXT_NOW) == "Jetzt"
+
+
+def test_next_rain_text_radar_countdown_has_no_preposition() -> None:
+    assert (
+        _text(
+            status=core.RainStatus.APPROACHING,
+            next_rain=_TEXT_NOW + timedelta(minutes=12),
+            next_rain_source="radar",
+            lead_time_minutes=12,
+        )
+        == "12 Min."
+    )
+
+
+def test_next_rain_text_forecast_within_a_day_is_clock_only() -> None:
+    # 15:00 UTC is 17:00 in Zurich.
+    at = datetime(2026, 10, 3, 15, 0, tzinfo=UTC)
+    assert _text(next_rain=at, next_rain_source="forecast") == "17:00"
+
+
+def test_next_rain_text_forecast_beyond_a_day_adds_weekday() -> None:
+    at = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)  # Monday 14:00 local
+    assert _text(next_rain=at, next_rain_source="forecast") == "Mo 14:00"
+    assert _text("fr", next_rain=at, next_rain_source="forecast") == "lu 14:00"
+
+
+def test_next_rain_text_without_rain_says_so() -> None:
+    assert _text() == "Kein Regen"
+    assert _text("en") == "No rain"
+    assert _text("it-CH") == "Niente pioggia"
+
+
+def test_next_rain_text_without_radar_data() -> None:
+    assert _text(status=core.RainStatus.UNKNOWN) == "Keine Daten"
+
+
+def test_next_rain_text_unknown_language_falls_back_to_english() -> None:
+    assert _text("rm") == "No rain"
+
+
+def test_combine_next_rain_records_how_far_the_forecast_was_searched() -> None:
+    hours = _hours((1, 0.0, 0), (3, 0.0, 0))
+    result = core.combine_next_rain(_dry_result(), NOW, hours)
+
+    assert result.next_rain is None
+    # Last hour starts at NOW+3h, so the search covered up to NOW+4h.
+    assert result.forecast_until == _hours((4, 0.0, 0))[0].start
+
+
+# ---------------------------------------------------------------------------
+# Radar look-ahead past the warning window (ADR-0010 amendment)
+# ---------------------------------------------------------------------------
+
+
+def _sample(minutes: int, wet: bool | None) -> core.RainSample:
+    return core.RainSample(
+        timestamp=NOW + timedelta(minutes=minutes), wet=wet, source="forecast"
+    )
+
+
+def test_radar_lookahead_finds_first_wet_frame() -> None:
+    first, covered = core.radar_lookahead(
+        [_sample(10, False), _sample(70, True), _sample(40, False)]
+    )
+    assert first == NOW + timedelta(minutes=70)
+    assert covered == NOW + timedelta(minutes=40)
+
+
+def test_radar_lookahead_stops_at_an_unknown_frame() -> None:
+    """A failed frame must not read as dry, nor let a later wet frame count."""
+    first, covered = core.radar_lookahead(
+        [_sample(10, False), _sample(40, None), _sample(70, True)]
+    )
+    assert first is None
+    assert covered == NOW + timedelta(minutes=10)
+
+
+def test_combine_next_rain_prefers_radar_look_ahead() -> None:
+    result = core.combine_next_rain(
+        _dry_result(),
+        NOW,
+        _hours((3, 2.0, 90)),
+        radar_ahead=NOW + timedelta(minutes=75),
+    )
+    assert result.next_rain == NOW + timedelta(minutes=75)
+    assert result.next_rain_source == "radar"
+    # The look-ahead is display only; the protection signal is untouched.
+    assert result.protection_active is False
+
+
+def test_forecast_only_answers_past_what_the_radar_saw_dry() -> None:
+    result = core.combine_next_rain(
+        _dry_result(),
+        NOW,
+        _hours((1, 2.0, 90), (3, 0.5, 60)),
+        radar_until=NOW + timedelta(hours=2),
+    )
+    assert result.next_rain == NOW + timedelta(hours=3)
+    assert result.next_rain_source == "forecast"
+
+
+def test_next_rain_text_radar_beyond_an_hour_is_a_clock_time() -> None:
+    at = datetime(2026, 10, 3, 9, 30, tzinfo=UTC)  # 90 min out, 11:30 local
+    assert _text(next_rain=at, next_rain_source="radar") == "11:30"

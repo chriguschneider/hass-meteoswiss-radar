@@ -159,10 +159,34 @@ def test_update_value_lead_time_minutes_none() -> None:
 
 def test_update_value_next_rain() -> None:
     ts = datetime(2024, 6, 1, 10, 0, tzinfo=UTC)
-    data = _make_nowcast(next_rain=ts, next_rain_source="forecast")
+    until = datetime(2024, 6, 3, 0, 0, tzinfo=UTC)
+    data = _make_nowcast(
+        next_rain=ts, next_rain_source="forecast", forecast_until=until
+    )
     sensor = _make_sensor(_desc("next_rain"), _make_coordinator(data=data))
-    assert sensor._attr_native_value == ts
-    assert sensor._attr_extra_state_attributes["source"] == "forecast"
+    # The state is display text; the timestamp itself is the `at` attribute.
+    assert isinstance(sensor._attr_native_value, str)
+    attrs = sensor._attr_extra_state_attributes
+    assert attrs["at"] == ts.isoformat()
+    assert attrs["source"] == "forecast"
+    assert attrs["checked_until"] == until.isoformat()
+
+
+def test_next_rain_says_no_rain_instead_of_unknown() -> None:
+    coordinator = _make_coordinator(data=_make_nowcast(status=RainStatus.DRY))
+    coordinator.hass.config.language = "de"
+    coordinator.hass.config.time_zone = "Europe/Zurich"
+    sensor = _make_sensor(_desc("next_rain"), coordinator)
+    assert sensor._attr_native_value == "Kein Regen"
+    assert sensor._attr_extra_state_attributes["at"] is None
+
+
+def test_countdown_sensors_are_disabled_by_default() -> None:
+    """"Next rain" already shows the countdown; these two mostly read unknown."""
+    assert _desc("rain_in").entity_registry_enabled_default is False
+    assert _desc("expected_dry_from").entity_registry_enabled_default is False
+    assert _desc("next_rain").entity_registry_enabled_default is True
+    assert _desc("nowcast_status").entity_registry_enabled_default is True
 
 
 def test_update_value_event_end() -> None:

@@ -108,10 +108,10 @@ The card editor stays English.
 
 For automations the integration can also evaluate the radar at your Home
 Assistant location. It is off by default: switch it on under Settings → Devices
-& services → MeteoSwiss Radar → Configure. The options dialog has three
-fields: *Local rain-nowcast entities* (the on/off toggle), *Minimum
-rain-protection hold (minutes)* (default 30, 0 disables) and *Weather entity
-for the longer forecast*.
+& services → MeteoSwiss Radar → Configure. The options dialog has the toggle
+*Rain sensors for my home* and two headed sections: *Rain protection: smooth
+out flapping* with *Minimum on-time* (minutes, default 30, 0 disables) and
+*Next rain beyond 2 hours* with *Weather entity for the hourly forecast*.
 
 Beyond the radar's own horizon, *Next rain* can read the hourly forecast of a
 `weather.*` entity. Pick one as the weather entity, and for

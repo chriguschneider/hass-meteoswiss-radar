@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
+from homeassistant.data_entry_flow import section
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -20,6 +27,13 @@ from .const import (
     OPT_PROTECTION_MIN_HOLD,
     OPT_WEATHER_ENTITY,
 )
+
+# The dialog groups the two nowcast refinements under headed sections so each
+# reads as part of the feature it tunes. Sections only shape the form: the
+# submitted values are flattened back so the stored options keep the flat keys
+# every reader in __init__ expects.
+SECTION_PROTECTION = "rain_protection"
+SECTION_FORECAST = "forecast"
 
 
 class MeteoSwissRadarConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -58,7 +72,7 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data=_flatten(user_input))
 
         # Import here, not at module level: config_flow is imported by HA during
         # discovery, before __init__ has run, and __init__ imports this module's
@@ -76,6 +90,7 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
         # handler is the entry id on every supported version, and looking it up
         # here also avoids the deprecated explicit `self.config_entry = ...`.
         entry = self.hass.config_entries.async_get_entry(self.handler)
+        weather_entity = forecast_weather_entity(entry)
 
         return self.async_show_form(
             step_id="init",
@@ -85,14 +100,57 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
                         OPT_NOWCAST_ENABLED,
                         default=nowcast_entities_enabled(self.hass, entry),
                     ): bool,
-                    vol.Required(
-                        OPT_PROTECTION_MIN_HOLD,
-                        default=protection_min_hold_minutes(entry),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
-                    vol.Optional(
-                        OPT_WEATHER_ENTITY,
-                        description={"suggested_value": forecast_weather_entity(entry)},
-                    ): EntitySelector(EntitySelectorConfig(domain="weather")),
+                    vol.Required(SECTION_PROTECTION): section(
+                        vol.Schema(
+                            {
+                                vol.Required(
+                                    OPT_PROTECTION_MIN_HOLD,
+                                    default=protection_min_hold_minutes(entry),
+                                ): NumberSelector(
+                                    NumberSelectorConfig(
+                                        min=0,
+                                        max=180,
+                                        step=1,
+                                        unit_of_measurement="min",
+                                        mode=NumberSelectorMode.BOX,
+                                    )
+                                ),
+                            }
+                        ),
+                        {"collapsed": False},
+                    ),
+                    vol.Required(SECTION_FORECAST): section(
+                        vol.Schema(
+                            {
+                                vol.Optional(
+                                    OPT_WEATHER_ENTITY,
+                                    description={"suggested_value": weather_entity},
+                                ): EntitySelector(
+                                    EntitySelectorConfig(domain="weather")
+                                ),
+                            }
+                        ),
+                        {"collapsed": False},
+                    ),
                 }
             ),
         )
+
+
+def _flatten(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Lift the section values back to the flat option keys.
+
+    The number selector submits a float; `protection_min_hold_minutes` rejects
+    anything but an int and would silently fall back to the default, so the
+    hold is stored as an int here.
+    """
+    options: dict[str, Any] = {}
+    for key, value in user_input.items():
+        if key in (SECTION_PROTECTION, SECTION_FORECAST) and isinstance(value, dict):
+            options.update(value)
+        else:
+            options[key] = value
+    hold = options.get(OPT_PROTECTION_MIN_HOLD)
+    if isinstance(hold, float) and hold.is_integer():
+        options[OPT_PROTECTION_MIN_HOLD] = int(hold)
+    return options

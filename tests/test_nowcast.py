@@ -809,6 +809,82 @@ def test_async_update_data_adaptive_second_pass_reruns_evaluate() -> None:
     assert result.status == RainStatus.ACTIVE
 
 
+def test_dry_day_radar_looks_two_hours_ahead_for_next_rain_only() -> None:
+    """On a dry day the radar frames up to 2 h answer "next rain", but they must
+    not reach evaluate_nowcast: the protection signal stays on the 30-minute
+    window. Frames beyond 2 h are not fetched at all."""
+    import custom_components.meteoswiss_radar.nowcast as _nowcast_mod
+
+    base = _now_ts()
+
+    def _pic(data_type: str, offset: int, name: str) -> dict:
+        return {
+            "data_type": data_type,
+            "timestamp": base + offset,
+            "radar_url": f"product/output/inca/precipitation/rate/{name}.json",
+        }
+
+    manifest = {
+        "config": {"timestamp": base},
+        "map_images": [
+            {
+                "pictures": [
+                    _pic("measurement", -300, "m"),
+                    _pic("forecast", 600, "lead"),
+                    _pic("forecast", 3600, "ahead"),
+                    _pic("forecast", 3 * 3600, "beyond"),
+                ]
+            }
+        ],
+    }
+    proxy = MagicMock()
+    proxy.async_get_json = AsyncMock(
+        side_effect=[
+            {"precipitation/animation": "20240101_1200"},
+            manifest,
+            {"wet": False},  # measurement
+            {"wet": False},  # lead
+            {"wet": True},  # ahead, 1 h out
+        ]
+    )
+    dry_nowcast = RainNowcast(
+        status=RainStatus.DRY,
+        protection_active=False,
+        currently_wet=False,
+        event_start=None,
+        event_end=None,
+        event_end_open=False,
+        lead_time_minutes=None,
+        forecast_horizon_end=None,
+        measurement_time=None,
+        dry_window_minutes=30,
+        warning_lead_minutes=30,
+    )
+    seen: list[int] = []
+
+    def _fake_evaluate(now, measurement, forecast_samples, previous, **_kwargs):  # noqa: ANN001
+        seen.append(len(forecast_samples))
+        return dry_nowcast
+
+    with (
+        patch.object(_nowcast_mod, "evaluate_nowcast", _fake_evaluate),
+        patch.object(_nowcast_mod, "frame_covers_grid_point", lambda *a: True),
+        patch.object(
+            _nowcast_mod,
+            "frame_is_wet_at_grid_point",
+            lambda frame, *a: frame["wet"],
+        ),
+    ):
+        result = _run(_coordinator(proxy)._async_update_data())
+
+    assert seen == [1], "only the lead frame may reach evaluate_nowcast"
+    assert proxy.async_get_json.call_count == 5, "the 3 h frame must not be fetched"
+    assert result.status is RainStatus.DRY
+    assert result.protection_active is False
+    assert result.next_rain_source == "radar"
+    assert result.next_rain == datetime.fromtimestamp(base + 3600, tz=UTC)
+
+
 # ---------------------------------------------------------------------------
 # Tests: reading the hourly forecast off a weather entity (ADR-0010)
 # ---------------------------------------------------------------------------

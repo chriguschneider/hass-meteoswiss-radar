@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, tzinfo
 from typing import Final
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -18,7 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DATA_NOWCAST, DOMAIN
 from .nowcast import MeteoSwissRadarNowcastCoordinator
-from .nowcast_core import RainStatus
+from .nowcast_core import RainStatus, next_rain_text
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -50,16 +52,19 @@ SENSORS: Final = (
         # whenever rain is not approaching, so long-term statistics over it
         # record gaps rather than a trend.
         native_unit_of_measurement=UnitOfTime.MINUTES,
+        # Off by default: "Next rain" already shows "12 min", and this countdown
+        # is `unknown` whenever rain is not approaching. Kept for automations.
+        entity_registry_enabled_default=False,
         value="lead_time_minutes",
     ),
     MeteoSwissRadarNowcastSensorDescription(
         key="next_rain",
         translation_key="next_rain",
         icon="mdi:weather-pouring",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        # Replaces the former `rain_start`, which could only ever answer inside
-        # the radar's 30-minute window and so read `unknown` on any quiet day.
-        # Same question, answered from whichever source can reach that far.
+        # A short text, not a timestamp: a timestamp sensor can only say
+        # `unknown` when no rain is expected, which is most days. The text
+        # says "No rain" instead, and the timestamp moves to the `at`
+        # attribute for automations.
         value="next_rain",
     ),
     MeteoSwissRadarNowcastSensorDescription(
@@ -67,6 +72,8 @@ SENSORS: Final = (
         translation_key="expected_dry_from",
         icon="mdi:weather-sunny-alert",
         device_class=SensorDeviceClass.TIMESTAMP,
+        # Off by default: only meaningful while it rains, `unknown` otherwise.
+        entity_registry_enabled_default=False,
         value="event_end",
     ),
 )
@@ -131,10 +138,25 @@ class MeteoSwissRadarNowcastSensor(
         self._attr_native_value = value
 
         if self.entity_description.key == "next_rain":
+            hass = getattr(self.coordinator, "hass", None)
+            config = getattr(hass, "config", None)
+            language = getattr(config, "language", None)
+            self._attr_native_value = next_rain_text(
+                data,
+                datetime.now(UTC),
+                _time_zone(getattr(config, "time_zone", None)),
+                language if isinstance(language, str) else None,
+            )
             self._attr_extra_state_attributes = {
+                "at": data.next_rain.isoformat() if data.next_rain else None,
                 # Which horizon answered: "radar" is the location at kilometre
                 # resolution, "forecast" the model's forecast point by the hour.
                 "source": data.next_rain_source,
+                # How far "No rain" reaches: the end of the forecast that was
+                # searched, or None when only the radar's 30 minutes were.
+                "checked_until": (
+                    data.forecast_until.isoformat() if data.forecast_until else None
+                ),
                 "radar_event_start": (
                     data.event_start.isoformat() if data.event_start else None
                 ),
@@ -167,3 +189,13 @@ class MeteoSwissRadarNowcastSensor(
                 ),
                 "frame_failures": self.coordinator.frame_failures,
             }
+
+
+def _time_zone(name: object) -> tzinfo:
+    """Return Home Assistant's configured zone, falling back to UTC."""
+    if isinstance(name, str):
+        try:
+            return ZoneInfo(name)
+        except (KeyError, ValueError):
+            pass
+    return UTC
