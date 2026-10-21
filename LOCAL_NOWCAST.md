@@ -46,6 +46,33 @@ on upgrade — an existing rain-protection automation keeps working.
 - `binary_sensor.meteoswiss_radar_rain_protection` is intended for automations that
   need a conservative rain-protection signal.
 
+## Attributes
+
+`sensor.meteoswiss_radar_rain_nowcast_status`:
+
+| Attribute | Meaning |
+| --- | --- |
+| `currently_wet` | Rain is measured at the location right now. |
+| `protection_active` | Whether rain protection is on; the binary sensor's state. |
+| `event_start` | Start of the current or approaching rain event (ISO timestamp), else `null`. |
+| `event_end` | Estimated end of the event: the start of the first confirmed dry window, else `null`. |
+| `event_end_open` | `true` while no dry window is confirmed yet. |
+| `warning_lead_minutes` | How far ahead rain triggers protection (30). |
+| `dry_window_minutes` | Length of the dry window that ends an event (30). |
+| `forecast_horizon_end` | End of the forecast the decision was based on. |
+| `measurement_time` | Time of the radar measurement used. |
+| `manifest_generated_at` | When MeteoSwiss generated the manifest. |
+| `frame_failures` | Frames that failed to load in the last update. |
+
+`sensor.meteoswiss_radar_next_rain`: `source` (`radar` or `forecast`) and
+`radar_event_start`, the start of the radar's own event even when the state
+comes from the forecast.
+
+`binary_sensor.meteoswiss_radar_rain_protection`: `status`, `currently_wet`,
+`rain_in_minutes`, `event_start`, `event_end`, `event_end_open`,
+`warning_lead_minutes`, `dry_window_minutes` and `protection_hold_until` (set
+only while the minimum hold keeps the sensor on).
+
 The IDs above are the English defaults. Entity names are translated by Home
 Assistant, so the actual IDs depend on the language active when the entities
 were first created and on what the entity registry already held.
