@@ -135,7 +135,7 @@ jobs:
             --model ${{ steps.model.outputs.model }}
             --max-turns 100
             --permission-mode dontAsk
-            --allowedTools "Read,Glob,Grep,Edit,Write,TodoWrite,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git show*),Bash(git switch*),Bash(git checkout*),Bash(git branch*),Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(git mv*),Bash(git restore*),Bash(git fetch*),Bash(git rev-parse*),Bash(ls*),Bash(cd *),Bash(gh issue view*),Bash(gh issue comment*),Bash(gh pr create*),Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),Bash(gh pr comment*),Bash(gh pr edit*),Bash(gh pr list*),Bash(pip install ruff pytest*),Bash(python -m pip install ruff pytest*),Bash(ruff check*),Bash(pytest*),Bash(python -m pytest*),Bash(npm ci*),Bash(npm test*),Bash(npm run check*),Bash(npx vitest*)"
+            --allowedTools "Read,Glob,Grep,Edit,Write,TodoWrite,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git show*),Bash(git switch*),Bash(git checkout*),Bash(git branch*),Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(git mv*),Bash(git restore*),Bash(git fetch*),Bash(git rev-parse*),Bash(git merge*),Bash(git pull*),Bash(ls*),Bash(cd *),Bash(gh issue view*),Bash(gh issue comment*),Bash(gh pr create*),Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),Bash(gh pr comment*),Bash(gh pr edit*),Bash(gh pr list*),Bash(gh pr ready*),Bash(/home/runner/work/_actions/anthropics/claude-code-action/*),Bash(grep*),Bash(rg*),Bash(find*),Bash(head*),Bash(tail*),Bash(wc*),Bash(cat*),Bash(sed*),Bash(awk*),Bash(sort*),Bash(uniq*),Bash(diff*),Bash(jq*),Bash(mkdir*),Bash(cp*),Bash(mv*),Bash(touch*),Bash(echo*),Bash(printf*),Bash(pip install ruff pytest*),Bash(python -m pip install ruff pytest*),Bash(ruff check*),Bash(pytest*),Bash(python -m pytest*),Bash(npm ci*),Bash(npm test*),Bash(npm run check*),Bash(npx vitest*),Bash(pip install -r requirements_test.txt*),Bash(python -m pip install -r requirements_test.txt*),Bash(ruff format*),Bash(npm install*),Bash(python3 -m pip install -r requirements_test.txt*),Bash(pip3 install*),Bash(python3 -m pytest*),Bash(python3 *),Bash(python *)"
           prompt: |
             You are working, unattended, on GitHub issue #${{ env.ISSUE }}
             of this repository. FIRST read AGENTS.md (its "Non-negotiables
@@ -144,6 +144,15 @@ jobs:
             the repo's own conventions and quality gates.
 
             Rules (non-negotiable):
+            - The Bash allowlist checks every command of a chain or pipe on
+              its own; shell loops (`for` / `while`) and command substitution
+              are never matched and get refused. For bulk edits over many
+              files write one script in the repo's language (node / python3)
+              or use the Edit tool per file; write PR and comment texts to a
+              file and pass `--body-file`.
+              If a call is refused, switch to an allowed equivalent (Edit/Write
+              tool, the repo's check script instead of a raw tool call) and
+              carry on -- a refused call is never a reason to stop.
             - Before anything else: if the issue is closed, or an open PR
               already handles it (`gh pr list --search "${{ env.ISSUE }}"`), comment on
               the issue saying so and stop.
