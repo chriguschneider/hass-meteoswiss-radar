@@ -8,6 +8,8 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+## [v0.16.0] — 2026-10-21
+
 ### Added
 
 - Optional local rain nowcast, evaluated from the same radar frames at your
@@ -303,7 +305,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.16.0...HEAD
+[v0.16.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.15.0...v0.16.0
 [v0.15.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.14.0...v0.15.0
 [v0.14.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.13.0...v0.14.0
 [v0.13.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.12.0...v0.13.0

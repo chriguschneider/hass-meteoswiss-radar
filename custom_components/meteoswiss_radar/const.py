@@ -20,7 +20,7 @@ OPT_PROTECTION_MIN_HOLD = "protection_min_hold_minutes"
 OPT_WEATHER_ENTITY = "weather_entity_id"
 
 # Keep in sync with manifest.json and the card's CARD_VERSION.
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 
 UPSTREAM_BASE = "https://www.meteoschweiz.admin.ch"
 
