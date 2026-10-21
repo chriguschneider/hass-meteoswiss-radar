@@ -12,7 +12,7 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 - Optional local rain nowcast, evaluated from the same radar frames at your
   Home Assistant location and off by default (Settings → Devices & services →
-  MeteoSwiss Radar → Configure → *Local rain-nowcast entities*; #190, #209):
+  MeteoSwiss Radar → Configure → *Rain sensors for my home*; #190, #209):
   - `sensor.meteoswiss_radar_next_rain`: when rain is next expected, with the
     attributes `source` (`radar` or `forecast`) and `radar_event_start`
     (#203, #218)
@@ -22,7 +22,7 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
     `event_end_open` (#190, #214)
   - `binary_sensor.meteoswiss_radar_rain_protection`: a conservative signal
     for awnings and the like, with `protection_hold_until` and a *Minimum
-    rain-protection hold* option (default 30 minutes, 0 disables; #216)
+    on-time* option (default 30 minutes, 0 disables; #216)
   - `sensor.meteoswiss_radar_rain_in` and
     `sensor.meteoswiss_radar_expected_dry_from`
 
@@ -30,6 +30,11 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 - A weather-entity option lets *Next rain* continue beyond the radar's
   horizon with that entity's hourly forecast, for example MeteoSwiss Weather
   with its hourly forecast option on (#218). Requires restart
+- The options dialog is grouped into two headed sections, *Rain protection:
+  smooth out flapping* and *Next rain beyond 2 hours*, with clearer labels
+  (*Rain sensors for my home*, *Minimum on-time*, *Weather entity for the
+  hourly forecast*) and German, French and Italian translations (#238, #239).
+  Requires restart
 - Diagnostics download (Settings → Devices & services → MeteoSwiss Radar → ⋮
   → Download diagnostics): attach it to a bug report instead of pasting logs.
   It holds the integration version, the options, whether the local nowcast is
@@ -38,6 +43,15 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ### Changed
 
+- *Next rain* is now a short text ("Now", "12 min", "17:00", "Mo 14:00" or "No
+  rain") instead of a timestamp, so it no longer reads `unknown` on a dry day;
+  the timestamp moves to the `at` attribute, and `checked_until` says how far
+  "No rain" reaches. On a dry day the radar now answers up to two hours ahead
+  and the weather entity only beyond that (#238, #239). Requires restart
+- `sensor.meteoswiss_radar_rain_in` and
+  `sensor.meteoswiss_radar_expected_dry_from` are disabled by default for new
+  installs, as they are `unknown` most of the time; enable them in the entity
+  settings if you use them (#238, #239). Requires restart
 - The project adopts the shared repo standard for contributor and release
   conventions (#220). No change to the card or the entities, so
   nothing to do on your side
