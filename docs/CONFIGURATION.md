@@ -11,7 +11,7 @@ The play button cycles three states: paused → play the configured window
 | Option | Default | Description |
 | --- | --- | --- |
 | `height` | `400` | Map height in px. |
-| `zoom` | `8` | Initial zoom, clamped to 6–15. Out-of-range values fall back to `8`. |
+| `zoom` | `8` | Initial zoom, in YAML clamped to 6–15 (the visual editor offers 6–14). Out-of-range values fall back to `8`. |
 | `center` | home location | `[lat, lon]` map centre. The house marker always follows the Home Assistant home location regardless of this. |
 
 ## Timeline range

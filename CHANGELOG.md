@@ -10,16 +10,45 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ### Added
 
+- Optional local rain nowcast, evaluated from the same radar frames at your
+  Home Assistant location and off by default (Settings → Devices & services →
+  MeteoSwiss Radar → Configure → *Local rain-nowcast entities*; #190, #209):
+  - `sensor.meteoswiss_radar_next_rain`: when rain is next expected, with the
+    attributes `source` (`radar` or `forecast`) and `radar_event_start`
+    (#203, #218)
+  - `sensor.meteoswiss_radar_rain_nowcast_status`: `dry`, `approaching`,
+    `active` or `unknown`, translated, with attributes such as
+    `currently_wet`, `protection_active`, `event_start`, `event_end` and
+    `event_end_open` (#190, #214)
+  - `binary_sensor.meteoswiss_radar_rain_protection`: a conservative signal
+    for awnings and the like, with `protection_hold_until` and a *Minimum
+    rain-protection hold* option (default 30 minutes, 0 disables; #216)
+  - `sensor.meteoswiss_radar_rain_in` and
+    `sensor.meteoswiss_radar_expected_dry_from`
+
+  Details in [LOCAL_NOWCAST.md](LOCAL_NOWCAST.md). Requires restart
+- A weather-entity option lets *Next rain* continue beyond the radar's
+  horizon with that entity's hourly forecast, for example MeteoSwiss Weather
+  with its hourly forecast option on (#218). Requires restart
 - Diagnostics download (Settings → Devices & services → MeteoSwiss Radar → ⋮
   → Download diagnostics): attach it to a bug report instead of pasting logs.
   It holds the integration version, the options, whether the local nowcast is
   enabled and the nowcast's last state. Your home location, zone and any URLs
-  are redacted. Requires restart
+  are redacted (#226). Requires restart
+
+### Changed
+
+- The project adopts the shared repo standard for contributor and release
+  conventions (#220). No change to the card or the entities, so
+  nothing to do on your side
 
 ### Fixed
 
+- Rain is classified from the legend in the MeteoSwiss manifest, and the
+  legend band is taken from the area's position rather than its colour (#212,
+  #219). Requires restart
 - The radar map is now dimmed with the rest of the dashboard when a pop-up
-  opens (e.g. a Bubble Card pop-up). Frontend only (browser reload)
+  opens (e.g. a Bubble Card pop-up) (#232). Frontend only (browser reload)
 
 ## [v0.15.0] — 2026-09-21
 
