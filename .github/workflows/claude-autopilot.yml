@@ -141,7 +141,7 @@ jobs:
       - name: Implement and open a draft PR
         id: claude
         if: steps.token.outputs.present == 'true' && steps.gate.outputs.open == '0' && steps.next.outputs.number != ''
-        uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6 # v1.0.253
+        uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9 # v1.0.258
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # A bot auto-merge can trigger this run; allow the bot actor.
