@@ -71,6 +71,7 @@ def test_nowcast_state_is_plain_json():
         last_update_success_time=datetime(2026, 9, 1, 11, 55, tzinfo=UTC),
         manifest_generated_at=None,
         frame_failures=2,
+        rain_threshold_mm_h=0.0,
         location_in_radar_coverage=True,
     )
     result = _run(_hass(coordinator), _entry({"protection_min_hold_minutes": 15}), True)
@@ -78,6 +79,7 @@ def test_nowcast_state_is_plain_json():
     assert dump["nowcast_enabled"] is True
     assert dump["entry"]["options"] == {"protection_min_hold_minutes": 15}
     assert dump["nowcast"]["last_update_success"] is True
+    assert dump["nowcast"]["rain_threshold_mm_h"] == 0.0
     assert dump["nowcast"]["last_update_time"] == "2026-09-01T11:55:00+00:00"
     assert dump["nowcast"]["data"]["status"] == RainStatus.APPROACHING.value
     assert dump["nowcast"]["data"]["event_start"] == "2026-09-01T12:00:00+00:00"

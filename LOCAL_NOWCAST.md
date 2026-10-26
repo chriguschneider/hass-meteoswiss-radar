@@ -12,8 +12,9 @@ not add a second upstream API path.
 The entities are **off by default** — installing the integration for the card
 alone should not add entities or a polling coordinator. Turn them on under
 **Settings → Devices & services → MeteoSwiss Radar → Configure**, with
-*Rain sensors for my home*. The same dialog holds the two refinements below:
-the [minimum on-time](#minimum-hold-on-the-protection-signal) for rain
+*Rain sensors for my home*. The same dialog holds the refinements below:
+the [rain threshold](#radar-rain-threshold), the
+[minimum on-time](#minimum-hold-on-the-protection-signal) for rain
 protection and the [weather entity](#seeing-further-than-the-radar) that
 continues *Next rain* past the radar.
 
@@ -108,8 +109,9 @@ the entities were first created.
 
 Rain protection starts when precipitation is measured at the Home Assistant
 location or forecast within 30 minutes. The integration classifies frame
-colours against the current MeteoSwiss legend and uses 1 mm/h as the rain
-threshold, ignoring the least reliable 0-1 mm/h band.
+colours against the current MeteoSwiss legend. By default it uses 1 mm/h as
+the rain threshold, ignoring the least reliable 0-1 mm/h band. The threshold
+can be changed under *Configure*; see below.
 
 Once an event has started, short dry gaps remain part of the same event. The
 event is only cleared when the current measurement is dry and the forecast
@@ -120,6 +122,40 @@ coordinator still fetches the radar frames up to two hours ahead, but only to
 answer *Next rain* — they never raise protection. When rain is approaching or
 active, it extends the fetch to two hours plus the dry-window padding so it can
 estimate when conditions are expected to be dry again.
+
+## Radar rain threshold
+
+Under *Configure → Radar rain detection*, **Rain threshold** controls which
+precipitation bands count as rain. Choose one of two settings:
+
+- **1 mm/h — standard:** ignore the weakest radar band. This remains the
+  default, including on upgrade.
+- **0 mm/h — include the weakest band:** include the weakest classified
+  precipitation band (currently 0-1 mm/h), for example for a sensitive awning.
+
+Neither choice makes empty, dry areas wet or turns unrecognisable colours
+into rain.
+
+The value is an **intensity in mm/h**, not an accumulated rainfall amount.
+Radar contours carry ranges, not exact intensities: a band counts only when
+its **lower bound** is at least the threshold. Only 0 and 1 mm/h are offered:
+sub-band precision is unavailable, and a higher threshold could silently
+exclude rain that should trigger protection. The manifest remains the source
+of the bands documented in `FORMAT.md`.
+
+Including weak echoes can cause false alarms: precipitation aloft may
+evaporate before reaching the ground, and ground clutter can resemble rain.
+0 mm/h means the weakest recognised radar band, not guaranteed detection of
+every drop. The threshold applies to all radar-derived values, including
+the measured state, near-term protection and radar-based *Next rain*.
+The hourly weather forecast keeps its separate 0.1 mm / 50 % thresholds.
+
+Saving reloads the entry and applies the choice without a Home Assistant
+restart. The active threshold appears
+in downloaded diagnostics under `nowcast.rain_threshold_mm_h`. The 30-minute
+warning window, dry-window confirmation and minimum on-time keep their
+existing behaviour. Missing or invalid stored values, including numbers
+other than 0 and 1, use 1 mm/h. Existing numeric 0 and 1 values are preserved.
 
 ## Seeing further than the radar
 

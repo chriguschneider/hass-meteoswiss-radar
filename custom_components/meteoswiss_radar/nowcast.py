@@ -14,6 +14,7 @@ from .const import DOMAIN
 from .nowcast_core import (
     DEFAULT_DRY_WINDOW_MINUTES,
     DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
+    DEFAULT_RAIN_THRESHOLD_MM_H,
     ForecastHour,
     combine_next_rain,
     radar_lookahead,
@@ -50,6 +51,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         longitude: float,
         protection_min_hold_minutes: int = DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
         weather_entity_id: str | None = None,
+        rain_threshold_mm_h: float = DEFAULT_RAIN_THRESHOLD_MM_H,
     ) -> None:
         super().__init__(
             hass,
@@ -61,6 +63,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
         self._x_km, self._y_km = wgs84_to_grid_km(latitude, longitude)
         self._protection_min_hold_minutes = protection_min_hold_minutes
         self._weather_entity_id = weather_entity_id or None
+        self.rain_threshold_mm_h = rain_threshold_mm_h
         self.forecast_available: bool | None = None
         self.manifest_generated_at: datetime | None = None
         self.frame_failures = 0
@@ -258,6 +261,7 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
                     self._x_km,
                     self._y_km,
                     legend,
+                    self.rain_threshold_mm_h,
                 )
                 return RainSample(timestamp=timestamp, wet=wet, source=source)
             except Exception as err:

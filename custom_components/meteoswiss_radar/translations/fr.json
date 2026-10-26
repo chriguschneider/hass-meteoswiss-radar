@@ -22,6 +22,16 @@
           "nowcast_enabled": "Évalue le radar à l'emplacement de Home Assistant toutes les 5 min. « Prochaine pluie » regarde jusqu'à 2 h à l'avance ; l'interrupteur « Protection pluie » pour les automatisations réagit à la pluie dans les 30 min."
         },
         "sections": {
+          "rain_detection": {
+            "name": "Détection de pluie par radar",
+            "description": "Règle la sensibilité de tous les capteurs de pluie issus du radar. Les prévisions horaires utilisent leurs propres seuils.",
+            "data": {
+              "rain_threshold_mm_h": "Seuil de pluie"
+            },
+            "data_description": {
+              "rain_threshold_mm_h": "1 mm/h ignore la bande radar la plus faible (réglage standard). 0 l’inclut pour les stores sensibles. Les échos faibles peuvent provoquer de fausses alertes."
+            }
+          },
           "rain_protection": {
             "name": "Protection pluie : lisser les fluctuations",
             "description": "En bordure d'une averse, le radar peut passer de pluie à sec en quelques minutes. Ce réglage maintient « Protection pluie » active pendant une durée minimale, pour que le store ne rentre et ne sorte pas à répétition.",
@@ -43,6 +53,14 @@
             }
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "rain_threshold_mm_h": {
+      "options": {
+        "1": "1 mm/h — standard",
+        "0": "0 mm/h — inclure la bande radar la plus faible"
       }
     }
   },

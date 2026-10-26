@@ -22,6 +22,16 @@
           "nowcast_enabled": "Wertet das Radar am Home-Assistant-Standort alle 5 Min. aus. «Nächster Regen» schaut bis 2 h voraus; der Schalter «Regenschutz» für Automationen reagiert auf Regen innert 30 Min."
         },
         "sections": {
+          "rain_detection": {
+            "name": "Regenerkennung im Radar",
+            "description": "Bestimmt die Empfindlichkeit aller aus dem Radar abgeleiteten Regensensoren. Stundenprognosen verwenden eigene Schwellen.",
+            "data": {
+              "rain_threshold_mm_h": "Regenschwelle"
+            },
+            "data_description": {
+              "rain_threshold_mm_h": "1 mm/h ignoriert die schwächste Radarstufe (Standard). 0 schliesst sie für empfindliche Markisen ein. Schwache Echos können Fehlalarme auslösen."
+            }
+          },
           "rain_protection": {
             "name": "Regenschutz: Schwankungen glätten",
             "description": "Am Rand eines Schauers kann das Radar innert Minuten zwischen Regen und trocken wechseln. Hier bleibt «Regenschutz» mindestens eine gewisse Zeit an, damit die Markise nicht mehrmals ein- und ausfährt.",
@@ -43,6 +53,14 @@
             }
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "rain_threshold_mm_h": {
+      "options": {
+        "1": "1 mm/h — Standard",
+        "0": "0 mm/h — schwächste Radarstufe einschliessen"
       }
     }
   },

@@ -22,6 +22,16 @@
           "nowcast_enabled": "Reads the radar at the Home Assistant location every 5 min. \"Next rain\" looks up to 2 h ahead; the \"Rain protection\" switch for automations reacts to rain within 30 min."
         },
         "sections": {
+          "rain_detection": {
+            "name": "Radar rain detection",
+            "description": "Sets sensitivity for all radar-derived rain sensors. Hourly weather forecasts use their own thresholds.",
+            "data": {
+              "rain_threshold_mm_h": "Rain threshold"
+            },
+            "data_description": {
+              "rain_threshold_mm_h": "Choose 1 mm/h to ignore the weakest radar band (standard), or 0 to include it for sensitive awnings. Including weak echoes may cause false alarms."
+            }
+          },
           "rain_protection": {
             "name": "Rain protection: smooth out flapping",
             "description": "At the edge of a shower the radar can switch between rain and dry within minutes. This keeps \"Rain protection\" on for a minimum time, so the awning does not move in and out repeatedly.",
@@ -43,6 +53,14 @@
             }
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "rain_threshold_mm_h": {
+      "options": {
+        "1": "1 mm/h — standard",
+        "0": "0 mm/h — include the weakest radar band"
       }
     }
   },

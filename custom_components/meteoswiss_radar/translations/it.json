@@ -22,6 +22,16 @@
           "nowcast_enabled": "Valuta il radar nella posizione di Home Assistant ogni 5 min. «Prossima pioggia» guarda fino a 2 h avanti; l'interruttore «Protezione pioggia» per le automazioni reagisce alla pioggia entro 30 min."
         },
         "sections": {
+          "rain_detection": {
+            "name": "Rilevamento della pioggia nel radar",
+            "description": "Regola la sensibilità di tutti i sensori di pioggia derivati dal radar. Le previsioni orarie usano soglie proprie.",
+            "data": {
+              "rain_threshold_mm_h": "Soglia di pioggia"
+            },
+            "data_description": {
+              "rain_threshold_mm_h": "1 mm/h ignora la fascia radar più debole (impostazione standard). 0 la include per tende sensibili. Gli echi deboli possono causare falsi allarmi."
+            }
+          },
           "rain_protection": {
             "name": "Protezione pioggia: smorzare le oscillazioni",
             "description": "Al margine di un rovescio il radar può passare da pioggia ad asciutto in pochi minuti. Questa impostazione mantiene «Protezione pioggia» attiva per un tempo minimo, così la tenda non entra ed esce più volte.",
@@ -43,6 +53,14 @@
             }
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "rain_threshold_mm_h": {
+      "options": {
+        "1": "1 mm/h — standard",
+        "0": "0 mm/h — includi la fascia radar più debole"
       }
     }
   },
