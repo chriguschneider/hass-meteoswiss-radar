@@ -100,7 +100,7 @@ function loadDecoder() {
     ctx,
     { filename: cardPath },
   );
-  return ctx.__decoder;
+  return { ...ctx.__decoder, context: ctx };
 }
 
 const { gridKmToLatLng, decodeFrame, frameBytes, DECODE_CACHE_BYTES, DECODE_CACHE_MAX_KEYS, SHARED_DECODE_CACHE, MeteoSwissRadarCard, MeteoSwissRadarCardEditor, EDITOR_DEFAULTS, parseLightning, strikesForFrame, makeRadarLayerClass, PATH_CACHE_SIZE, STRINGS, tr, weekdayShort, windowRef } =
@@ -652,6 +652,111 @@ describe("editor prunes default values from config (issue #4)", () => {
     const editor = makeEditor({ type: "t" });
     editor._emit({ type: "t", play_forecast_until: "18:00", ...EDITOR_DEFAULTS });
     expect(editor._config).toEqual({ type: "t", play_forecast_until: "18:00" });
+  });
+});
+
+describe("asynchronous lifecycle and registration errors", () => {
+  it.each(["hass", "connectedCallback"])(
+    "%s handles an unexpected initialization rejection",
+    async (callback) => {
+      const { MeteoSwissRadarCard: Card, context } = loadDecoder();
+      const warnings = [];
+      context.console.warn = (...args) => warnings.push(args);
+      const card = new Card();
+      const failure = new Error("unexpected initialization failure");
+      card._maybeInit = async () => { throw failure; };
+
+      if (callback === "hass") {
+        const hass = {};
+        card.hass = hass;
+        expect(card._hass).toBe(hass);
+      } else {
+        card.connectedCallback();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][0]).toBe("meteoswiss-radar-card: initialization failed:");
+      expect(warnings[0][1]).toBe(failure);
+    },
+  );
+
+  function loadForRegistry({ whenDefined = () => Promise.resolve(), defineError } = {}) {
+    const definitions = [];
+    const warnings = [];
+    const timers = [];
+    const registry = {
+      get: () => undefined,
+      whenDefined,
+      define(name) {
+        if (defineError) throw defineError;
+        definitions.push(name);
+      },
+    };
+    const ctx = {
+      window: { customElements: registry, customCards: [] },
+      customElements: registry,
+      document: {
+        querySelector: () => ({}),
+        readyState: "complete",
+        addEventListener() {},
+      },
+      HTMLElement: class {},
+      console: {
+        info() {},
+        warn: (...args) => warnings.push(args),
+      },
+      Promise,
+      setTimeout(callback, delay) {
+        timers.push({ callback, delay });
+        return timers.length;
+      },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(readFileSync(cardPath, "utf8"), ctx, { filename: cardPath });
+    return { definitions, warnings, timers };
+  }
+
+  it("registers both elements when the HA registry is ready", async () => {
+    const { definitions, warnings } = loadForRegistry();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(definitions).toEqual([
+      "meteoswiss-radar-card", "meteoswiss-radar-card-editor",
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("retains the registry timeout fallback", async () => {
+    const { definitions, warnings, timers } = loadForRegistry({
+      whenDefined: () => new Promise(() => {}),
+    });
+    expect(definitions).toEqual([]);
+    expect(timers[0].delay).toBe(8000);
+    timers[0].callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(definitions).toHaveLength(2);
+    expect(warnings).toEqual([]);
+  });
+
+  it("handles a rejected registry readiness promise", async () => {
+    const failure = new Error("registry readiness failed");
+    const { definitions, warnings } = loadForRegistry({
+      whenDefined: () => Promise.reject(failure),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(definitions).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toEqual([
+      "meteoswiss-radar-card: registration failed:", failure,
+    ]);
+  });
+
+  it("handles an exception thrown while defining the card", async () => {
+    const failure = new Error("registry definition failed");
+    const { warnings } = loadForRegistry({ defineError: failure });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0][1]).toBe(failure);
   });
 });
 
@@ -3866,7 +3971,7 @@ describe("card localisation (forum feedback)", () => {
   it("relabels an initialised card when the language changes", () => {
     const card = makeCard("en");
     card._initialized = true;
-    card._maybeInit = () => {};
+    card._maybeInit = async () => {};
     card._frames[0].shortLabel = card._frameLabel(card._frames[0]);
     card._updateLabel();
     expect(card._labelL2.textContent).toBe("Forecast");

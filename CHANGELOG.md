@@ -8,6 +8,11 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Fixed
+
+- Handle unexpected radar-card initialization and element-registration failures
+  without unhandled Promise rejections. Frontend only (browser reload).
+
 ## [v0.16.0] — 2026-10-21
 
 ### Added
