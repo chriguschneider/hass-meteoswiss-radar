@@ -1011,3 +1011,78 @@ def test_a_naive_forecast_datetime_is_read_as_utc() -> None:
     hours = _run(coordinator._async_forecast_hours())
 
     assert hours[0].start.tzinfo is not None
+
+
+@pytest.mark.parametrize(
+    "threshold,measurement_kind,wet_minutes,status,protection,next_source",
+    [
+        (None, "weak", (10, 20, 30), RainStatus.DRY, False, None),
+        (1.0, "weak", (10, 20, 30), RainStatus.DRY, False, None),
+        (0.5, "weak", (10, 20, 30), RainStatus.DRY, False, None),
+        (0.0, "weak", (10, 20, 30), RainStatus.ACTIVE, True, "radar"),
+        (0.0, "dry", (20, 30), RainStatus.APPROACHING, True, "radar"),
+        (0.0, "dry", (60,), RainStatus.DRY, False, "radar"),
+        (0.0, "dry", (), RainStatus.DRY, False, None),
+        (0.0, "unknown", (), RainStatus.UNKNOWN, None, None),
+        (0.0, "outside", (), RainStatus.UNKNOWN, None, None),
+    ],
+)
+def test_coordinator_threshold_controls_measurement_and_forecast(
+    threshold, measurement_kind, wet_minutes, status, protection, next_source,
+) -> None:
+    """Exercise the real fixture through the full coordinator, including pass 2.
+
+    Timings and dry variants are synthetic; geometry and colours come from the
+    committed real frame/animation fixtures. A threshold of zero must also
+    reach the extra frames used only for the next-rain display.
+    """
+    now = datetime.now(UTC)
+    manifest = _fixture_animation()
+    measurement_meta = {
+        "data_type": "measurement",
+        "timestamp": (now - timedelta(minutes=5)).timestamp(),
+        "radar_url": "/measurement.json",
+    }
+    manifest["map_images"] = [{"pictures": [measurement_meta, *[
+        {
+            "data_type": "forecast",
+            "timestamp": (now + timedelta(minutes=minutes)).timestamp(),
+            "radar_url": f"/forecast-{minutes}.json",
+        }
+        for minutes in range(10, 121, 10)
+    ]]}]
+    frame_path = pathlib.Path(__file__).parent / "fixtures" / "frame.json"
+    frame = json.loads(frame_path.read_text(encoding="utf-8"))
+    dry = {**frame, "areas": []}
+    unknown = {**frame, "areas": [{**frame["areas"][0], "color": "010101"}]}
+    outside = {**frame, "coords": {"x_min": 0, "x_max": 1, "y_min": 0, "y_max": 1}}
+    measurements = {"weak": frame, "dry": dry, "unknown": unknown, "outside": outside}
+
+    class _Proxy:
+        async def async_get_json(self, tail: str) -> dict:
+            if tail == "product/output/versions.json":
+                return {"precipitation/animation": "test"}
+            if tail.endswith("/animation.json"):
+                return manifest
+            if tail == "measurement.json":
+                return measurements[measurement_kind]
+            minutes = int(tail.removeprefix("forecast-").removesuffix(".json"))
+            return frame if minutes in wet_minutes else dry
+
+    hass = MagicMock()
+
+    async def _executor(fn, *args):
+        return fn(*args)
+
+    hass.async_add_executor_job = _executor
+    kwargs = {} if threshold is None else {"rain_threshold_mm_h": threshold}
+    coordinator = MeteoSwissRadarNowcastCoordinator(hass, _Proxy(), 0.0, 0.0, **kwargs)
+    coordinator._x_km, coordinator._y_km = 610.3328, 160.6157
+    result = _run(coordinator._async_update_data())
+    assert result.status is status
+    assert result.protection_active is protection
+    assert result.next_rain_source == next_source
+    expected_failures = 1 if measurement_kind in ("unknown", "outside") else 0
+    assert coordinator.frame_failures == expected_failures
+    if status in (RainStatus.ACTIVE, RainStatus.APPROACHING):
+        assert result.event_end == now + timedelta(minutes=40)

@@ -19,8 +19,9 @@ DEFAULT_WARNING_LEAD_MINUTES = 30
 DEFAULT_DRY_WINDOW_MINUTES = 30
 DEFAULT_FORECAST_STEP_MINUTES = 10
 MAX_FORECAST_GAP_MINUTES = 15
-# The lowest 0-1 mm/h band is deliberately ignored because weak radar echoes
-# are the regime most affected by virga, ground clutter, and beam shielding.
+# By default ignore the lowest 0-1 mm/h band: weak radar echoes are the regime
+# most affected by virga, ground clutter, and beam shielding. An explicit option
+# can include it for sensitive actuators (ADR-0011).
 DEFAULT_RAIN_THRESHOLD_MM_H = 1.0
 # A band is identified by its position in `areas[]`, so the colour is only a
 # sanity check on one candidate rather than a search key. Measured over six live

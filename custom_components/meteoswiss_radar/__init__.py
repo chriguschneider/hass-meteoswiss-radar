@@ -33,12 +33,16 @@ from .const import (
     FRONTEND_URL_BASE,
     OPT_NOWCAST_ENABLED,
     OPT_PROTECTION_MIN_HOLD,
+    OPT_RAIN_THRESHOLD,
     OPT_WEATHER_ENTITY,
     PROXY_URL,
     UPSTREAM_BASE,
 )
 
-from .nowcast_core import DEFAULT_PROTECTION_MIN_HOLD_MINUTES
+from .nowcast_core import (
+    DEFAULT_PROTECTION_MIN_HOLD_MINUTES,
+    DEFAULT_RAIN_THRESHOLD_MM_H,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -526,6 +530,19 @@ def protection_min_hold_minutes(entry: ConfigEntry) -> int:
     return stored
 
 
+def rain_threshold_mm_h(entry: ConfigEntry) -> float:
+    """Resolve the radar threshold; keep the released default on invalid input."""
+    options = getattr(entry, "options", None)
+    stored = options.get(OPT_RAIN_THRESHOLD) if isinstance(options, Mapping) else None
+    if (
+        isinstance(stored, bool)
+        or not isinstance(stored, (int, float))
+        or stored not in (0, 1)
+    ):
+        return DEFAULT_RAIN_THRESHOLD_MM_H
+    return float(stored)
+
+
 def forecast_weather_entity(entry: ConfigEntry) -> str | None:
     """Return the weather entity whose hourly forecast extends `next_rain`.
 
@@ -578,6 +595,7 @@ async def _async_setup_nowcast(
         longitude=longitude,
         protection_min_hold_minutes=protection_min_hold_minutes(entry),
         weather_entity_id=forecast_weather_entity(entry),
+        rain_threshold_mm_h=rain_threshold_mm_h(entry),
     )
     await coordinator.async_refresh()
     if coordinator.location_in_radar_coverage is False:

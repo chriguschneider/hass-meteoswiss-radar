@@ -8,6 +8,13 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- A choice of 0 or 1 mm/h under *Configure → Radar rain detection*.
+  The default remains 1 mm/h; 0 includes the weakest precipitation band for
+  sensitive awnings, with a higher risk of false alarms. Saving applies the
+  choice by reloading the entry.
+
 ### Fixed
 
 - Handle unexpected radar-card initialization and element-registration failures

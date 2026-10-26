@@ -76,6 +76,7 @@ def _nowcast_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> dict | None
             getattr(coordinator, "manifest_generated_at", None)
         ),
         "frame_failures": getattr(coordinator, "frame_failures", None),
+        "rain_threshold_mm_h": getattr(coordinator, "rain_threshold_mm_h", None),
         "location_in_radar_coverage": getattr(
             coordinator, "location_in_radar_coverage", None
         ),

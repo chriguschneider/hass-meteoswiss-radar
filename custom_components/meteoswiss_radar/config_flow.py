@@ -12,6 +12,9 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -25,13 +28,15 @@ from .const import (
     DOMAIN,
     OPT_NOWCAST_ENABLED,
     OPT_PROTECTION_MIN_HOLD,
+    OPT_RAIN_THRESHOLD,
     OPT_WEATHER_ENTITY,
 )
 
-# The dialog groups the two nowcast refinements under headed sections so each
+# The dialog groups the nowcast refinements under headed sections so each
 # reads as part of the feature it tunes. Sections only shape the form: the
 # submitted values are flattened back so the stored options keep the flat keys
 # every reader in __init__ expects.
+SECTION_DETECTION = "rain_detection"
 SECTION_PROTECTION = "rain_protection"
 SECTION_FORECAST = "forecast"
 
@@ -81,6 +86,7 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
             forecast_weather_entity,
             nowcast_entities_enabled,
             protection_min_hold_minutes,
+            rain_threshold_mm_h,
         )
 
         # Resolve the entry from the flow handler rather than `self.config_entry`:
@@ -100,6 +106,25 @@ class MeteoSwissRadarOptionsFlow(OptionsFlow):
                         OPT_NOWCAST_ENABLED,
                         default=nowcast_entities_enabled(self.hass, entry),
                     ): bool,
+                    vol.Required(SECTION_DETECTION): section(
+                        vol.Schema(
+                            {
+                                vol.Required(
+                                    OPT_RAIN_THRESHOLD,
+                                    default=str(int(rain_threshold_mm_h(entry))),
+                                ): SelectSelector(
+                                    SelectSelectorConfig(
+                                        options=["1", "0"],
+                                        translation_key=OPT_RAIN_THRESHOLD,
+                                        mode=SelectSelectorMode.LIST,
+                                        custom_value=False,
+                                        multiple=False,
+                                    )
+                                ),
+                            }
+                        ),
+                        {"collapsed": False},
+                    ),
                     vol.Required(SECTION_PROTECTION): section(
                         vol.Schema(
                             {
@@ -142,15 +167,21 @@ def _flatten(user_input: dict[str, Any]) -> dict[str, Any]:
 
     The number selector submits a float; `protection_min_hold_minutes` rejects
     anything but an int and would silently fall back to the default, so the
-    hold is stored as an int here.
+    hold is stored as an int here. The threshold select submits a string;
+    store its two choices numerically to preserve the existing option type.
     """
     options: dict[str, Any] = {}
     for key, value in user_input.items():
-        if key in (SECTION_PROTECTION, SECTION_FORECAST) and isinstance(value, dict):
+        if key in (
+            SECTION_DETECTION, SECTION_PROTECTION, SECTION_FORECAST
+        ) and isinstance(value, dict):
             options.update(value)
         else:
             options[key] = value
     hold = options.get(OPT_PROTECTION_MIN_HOLD)
     if isinstance(hold, float) and hold.is_integer():
         options[OPT_PROTECTION_MIN_HOLD] = int(hold)
+    threshold = options.get(OPT_RAIN_THRESHOLD)
+    if isinstance(threshold, str) and threshold in ("0", "1"):
+        options[OPT_RAIN_THRESHOLD] = float(threshold)
     return options

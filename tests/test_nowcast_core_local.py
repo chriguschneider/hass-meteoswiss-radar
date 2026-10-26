@@ -859,3 +859,16 @@ def test_forecast_only_answers_past_what_the_radar_saw_dry() -> None:
 def test_next_rain_text_radar_beyond_an_hour_is_a_clock_time() -> None:
     at = datetime(2026, 10, 3, 9, 30, tzinfo=UTC)  # 90 min out, 11:30 local
     assert _text(next_rain=at, next_rain_source="radar") == "11:30"
+
+
+def test_zero_threshold_keeps_unknown_and_empty_areas_distinct() -> None:
+    fixture = json.loads((ROOT / "tests" / "fixtures" / "frame.json").read_text())
+    assert core.frame_is_wet_at_grid_point(
+        {**fixture, "areas": []}, 610.3328, 160.6157, LEGEND, 0.0,
+    ) is False
+    for colour in ("010101", "ffffff", "333e48"):
+        unknown = {**fixture, "areas": [{**fixture["areas"][0], "color": colour}]}
+        assert core.frame_is_wet_at_grid_point(
+            unknown, 610.3328, 160.6157, LEGEND, 0.0,
+        ) is None
+    assert core.frame_is_wet_at_grid_point(fixture, 0, 0, LEGEND, 0.0) is None

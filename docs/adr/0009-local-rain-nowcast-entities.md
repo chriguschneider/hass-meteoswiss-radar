@@ -170,3 +170,11 @@ came to be wrong.
 - Changes to warning lead time, dry-window semantics, proxy reuse, the
   nowcast module boundary, the colour-to-precipitation mapping, or either
   decoder implementation should update this ADR.
+
+## Amendment 2026-10-22 (ADR-0011, proposed)
+
+The 1 mm/h default remains. ADR-0011 proposes an explicit
+`rain_threshold_mm_h` option so sensitive awnings can include the weakest
+precipitation band at 0 mm/h. Classification still uses positional legend
+bands and their lower bounds, with colour validation and unknown fallback;
+no decoder or upstream request changes.
