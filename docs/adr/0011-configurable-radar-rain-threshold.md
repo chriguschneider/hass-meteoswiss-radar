@@ -1,6 +1,6 @@
 # ADR-0011: Configurable radar rain threshold
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-22
 - **Updated:** 2026-10-26, following review on #244
 
