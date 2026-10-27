@@ -909,11 +909,22 @@ class MeteoSwissRadarCard extends HTMLElement {
     this._initialized = true;
     // Register this card in the shared decode cache so the byte/key budgets
     // scale to the number of active product streams (issue #139).
-    const products = this._countActiveProducts();
-    SHARED_DECODE_CACHE.attach(products);
-    this._cacheProducts = products;
     const epoch = this._epoch;
-    this._renderShell();
+    try {
+      const products = this._countActiveProducts();
+      SHARED_DECODE_CACHE.attach(products);
+      this._cacheProducts = products;
+      this._renderShell();
+    } catch (err) {
+      // Same recovery as a failed Leaflet load: without it _initialized would
+      // stay true and the card would stay blank with no retry.
+      if (this._epoch !== epoch) return;
+      this._initialized = false;
+      if (this._cacheProducts) SHARED_DECODE_CACHE.detach(this._cacheProducts);
+      this._cacheProducts = 0;
+      this._showError(err.message || String(err));
+      return;
+    }
     // Start the manifest + first-frame fetch before awaiting Leaflet so both
     // network chains overlap. Only _showFrame needs _radar; everything before
     // it can run while the script is still loading.

@@ -2655,6 +2655,86 @@ describe("async-init teardown race (issue #68)", () => {
     expect(card._refreshTimerStarted).toBe(true);
   });
 
+  describe("start-up failure before the Leaflet load (issue #246)", () => {
+    function spyCache() {
+      const calls = { attach: 0, detach: 0 };
+      const origAttach = SHARED_DECODE_CACHE.attach;
+      const origDetach = SHARED_DECODE_CACHE.detach;
+      SHARED_DECODE_CACHE.attach = function (...a) { calls.attach++; return origAttach.apply(this, a); };
+      SHARED_DECODE_CACHE.detach = function (...a) { calls.detach++; return origDetach.apply(this, a); };
+      calls.restore = () => {
+        SHARED_DECODE_CACHE.attach = origAttach;
+        SHARED_DECODE_CACHE.detach = origDetach;
+      };
+      return calls;
+    }
+
+    it("_renderShell throwing resets state, shows the error and balances attach/detach", async () => {
+      const card = makeCard();
+      makeManifestStub(card);
+      card._loadLeaflet = () => Promise.resolve({});
+      card._renderShell = () => { throw new Error("shell boom"); };
+      let errors = 0;
+      card._showError = (msg) => { errors++; card._lastError = msg; };
+      const baseline = SHARED_DECODE_CACHE._cards;
+      const calls = spyCache();
+      try {
+        await card._maybeInit();
+      } finally {
+        calls.restore();
+      }
+      expect(card._initialized).toBe(false);
+      expect(errors).toBe(1);
+      expect(card._lastError).toBe("shell boom");
+      expect(calls.attach).toBe(1);
+      expect(calls.detach).toBe(1);
+      expect(card._cacheProducts).toBe(0);
+      expect(SHARED_DECODE_CACHE._cards).toBe(baseline);
+      expect(card._refreshTimerStarted).toBe(false);
+    });
+
+    it("_countActiveProducts throwing recovers without any attach", async () => {
+      const card = makeCard();
+      card._countActiveProducts = () => { throw new Error("count boom"); };
+      let errors = 0;
+      card._showError = (msg) => { errors++; card._lastError = msg; };
+      const baseline = SHARED_DECODE_CACHE._cards;
+      const calls = spyCache();
+      try {
+        await card._maybeInit();
+      } finally {
+        calls.restore();
+      }
+      expect(card._initialized).toBe(false);
+      expect(errors).toBe(1);
+      expect(card._lastError).toBe("count boom");
+      expect(calls.attach).toBe(0);
+      expect(calls.detach).toBe(0);
+      expect(SHARED_DECODE_CACHE._cards).toBe(baseline);
+    });
+
+    it("a following hass set retries _maybeInit and succeeds", async () => {
+      const card = makeCard();
+      makeManifestStub(card);
+      card._loadLeaflet = () => Promise.resolve({});
+      let fail = true;
+      card._renderShell = () => { if (fail) throw new Error("once"); };
+      const first = card._maybeInit();
+      await first;
+      expect(card._initialized).toBe(false);
+
+      fail = false;
+      const retried = [];
+      const origMaybeInit = card._maybeInit.bind(card);
+      card._maybeInit = () => { const p = origMaybeInit(); retried.push(p); return p; };
+      card.hass = {};
+      expect(retried.length).toBe(1);
+      await retried[0];
+      expect(card._initialized).toBe(true);
+      expect(card._refreshTimerStarted).toBe(true);
+    });
+  });
+
   it("data chain starts before Leaflet resolves (parallel fetch, issue #72)", async () => {
     const card = makeCard();
     makeManifestStub(card);

@@ -17,6 +17,9 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ### Fixed
 
+- The radar card no longer stays blank for good if it fails while starting up;
+  it shows the error and tries again on the next update. Frontend only
+  (browser reload).
 - Handle unexpected radar-card initialization and element-registration failures
   without unhandled Promise rejections. Frontend only (browser reload).
 
