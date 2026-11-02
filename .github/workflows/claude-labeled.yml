@@ -64,7 +64,7 @@ jobs:
       # the list. Start with audit, switch to block once a few runs show the
       # full list (docs/agent-automation.md). Must stay the first step.
       - name: Harden the runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
           allowed-endpoints: >
@@ -107,7 +107,7 @@ jobs:
 
       # The checks run with the same Python as ci.yml; the runner's system
       # Python refuses `pip install` outside a virtualenv (PEP 668).
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: steps.token.outputs.present == 'true'
         with:
           python-version: "3.13"
@@ -122,7 +122,7 @@ jobs:
       - name: Implement and open a draft PR
         id: claude
         if: steps.token.outputs.present == 'true'
-        uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9 # v1.0.258
+        uses: anthropics/claude-code-action@d535f5172dec02b204866b393d6b20b9b2aaf98d # v1.0.266
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Only the owner's and the agent's own comments reach the prompt.
