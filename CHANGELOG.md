@@ -8,18 +8,27 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
-### Added
+## [v0.18.0] — 2026-11-18
 
-- Editor: a Location panel to centre the map on another place, with a place
-  search and a map, like in Weather Station Card. *Frontend only (browser
-  reload).*
+![The card editor's new Location panel with Thun picked from the place search, and the preview map next to it centred on Thun](https://raw.githubusercontent.com/chriguschneider/hass-meteoswiss-radar/master/docs/images/editor-location.png)
 
-### Fixed
+**Centre the map on any place, right in the editor.** Want the radar around your holiday flat, your parents' village or the office instead of home? Open the card editor, switch on *Use another location*, then search for a town or drag the pin. The house marker stays at home.
 
-- Defer hourly weather forecasts while the configured source is missing,
-  unavailable or still starting. This avoids repeated missing-target warnings
-  and resumes forecasts on the next normal refresh once the source is ready.
-  Requires restart
+**What you need to do:** restart Home Assistant after updating, then reload the browser (twice if the new panel does not show up yet).
+
+### Details
+
+#### Added
+
+- **Location panel in the card editor**, first in the editor. It shows your Home Assistant home; *Use another location* opens a place search and a map with a draggable pin, and saves the point as the existing `center` option. The preview follows while you drag. Cards that already set `center` in YAML keep working. The search asks Open-Meteo only when you click *Search*. Frontend only (browser reload).
+
+#### Fixed
+
+- The rain sensors no longer make Home Assistant log missing-target warnings while your weather entity is still starting (after a restart or a reload). The forecast part waits until the entity is ready; the radar answer is unaffected. Thanks to @martins-netizen. Requires restart.
+
+#### Under the hood
+
+- ADR-0012: the editor may call Open-Meteo's geocoding on click; the card never calls it at runtime, and the proxy allowlist is unchanged.
 
 ## [v0.17.0] — 2026-10-27
 
@@ -335,7 +344,8 @@ and test improvements from the 2026-08-22 architecture review.
   for the card decoder (#16); full proxy allowlist, cache-header, and
   lifecycle coverage (#17)
 
-[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.18.0...HEAD
+[v0.18.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.17.0...v0.18.0
 [v0.17.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.16.0...v0.17.0
 [v0.16.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.15.0...v0.16.0
 [v0.15.0]: https://github.com/chriguschneider/hass-meteoswiss-radar/compare/v0.14.0...v0.15.0

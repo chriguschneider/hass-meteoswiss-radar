@@ -41,7 +41,8 @@ Assistant dashboard.
   ~28 h of forecast, as one timeline. Play it, or drag to any moment.
 - **Lightning, snow, sleet and freezing rain** as optional overlays, same as the
   app's own toggles.
-- **Centred on your home**, with the intensity legend in mm/h.
+- **Centred on your home** or any place you pick, with the intensity legend in
+  mm/h.
 - **No YAML needed.** There's a visual editor, and the defaults just work.
 - **When MeteoSwiss changes something upstream**, you get a small banner
   instead of a broken map.
@@ -92,12 +93,12 @@ layer_lightning: true
 layer_snow: true
 ```
 
-One thing surprises people, so it's worth saying up front: **lightning only
-exists on past frames, and snow, sleet and freezing rain only on forecast
-frames.** That's how MeteoSwiss publishes it — they don't predict lightning, and
-they don't record precipitation type. So a snow overlay shows nothing while you
-scrub through recorded radar, and lightning vanishes the moment you cross into
-the forecast. The app behaves the same way.
+One thing surprises people: **lightning only exists on past frames, and snow,
+sleet and freezing rain only on forecast frames.** That's how MeteoSwiss
+publishes it — they don't predict lightning, and they don't record precipitation
+type. So a snow overlay shows nothing while you scrub through recorded radar,
+and lightning vanishes the moment you cross into the forecast. The app behaves
+the same way.
 
 The card speaks German, French and Italian: the timeline's weekday labels
 follow your Home Assistant profile language, and the map label, legend and
