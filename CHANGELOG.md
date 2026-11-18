@@ -8,6 +8,12 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
 
 ## [Unreleased]
 
+### Added
+
+- Editor: a Location panel to centre the map on another place, with a place
+  search and a map, like in Weather Station Card. *Frontend only (browser
+  reload).*
+
 ## [v0.17.0] — 2026-10-27
 
 ### Added
