@@ -13,7 +13,7 @@ import pathlib
 import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -894,6 +894,8 @@ def _forecast_coordinator(
 ) -> MeteoSwissRadarNowcastCoordinator:
     """A coordinator whose `weather.get_forecasts` call is scripted."""
     hass = MagicMock()
+    hass.states.get.return_value = SimpleNamespace(state="sunny", attributes={})
+    hass.services.has_service.return_value = True
 
     async def _executor(fn, *args):  # noqa: ANN001
         return fn(*args)
@@ -907,7 +909,7 @@ def _forecast_coordinator(
             raise raises
         return response
 
-    hass.services.async_call = _call
+    hass.services.async_call = AsyncMock(side_effect=_call)
     return MeteoSwissRadarNowcastCoordinator(
         hass, MagicMock(), 46.95, 7.44, weather_entity_id=entity_id
     )
@@ -947,6 +949,83 @@ def test_no_weather_entity_means_no_forecast() -> None:
 
     assert _run(coordinator._async_forecast_hours()) is None
     assert coordinator.forecast_available is None
+    coordinator.hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("service_available", "weather_state"),
+    [
+        (False, SimpleNamespace(state="sunny", attributes={})),
+        (True, None),
+        (True, SimpleNamespace(state="unavailable", attributes={})),
+        (True, SimpleNamespace(state="sunny", attributes={"restored": True})),
+    ],
+    ids=["service_not_ready", "missing", "unavailable", "restored"],
+)
+def test_unready_weather_skips_service_and_recovers_on_next_refresh(
+    service_available, weather_state,
+) -> None:
+    """Skip known invalid targets without treating absent forecasts as no rain."""
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(
+        entity,
+        _forecast_response(
+            entity,
+            [{
+                "datetime": "2026-10-01T15:00:00+00:00",
+                "precipitation": 0.3,
+                "precipitation_probability": 59,
+            }],
+        ),
+    )
+    coordinator.hass.services.has_service.return_value = service_available
+    coordinator.hass.states.get.return_value = weather_state
+    coordinator.forecast_available = True
+
+    assert _run(coordinator._async_forecast_hours()) is None
+    assert coordinator.forecast_available is False
+    coordinator.hass.services.async_call.assert_not_awaited()
+    coordinator.hass.states.get.assert_called_once_with(entity)
+    coordinator.hass.services.has_service.assert_called_once_with(
+        "weather", "get_forecasts"
+    )
+
+    coordinator.hass.services.has_service.return_value = True
+    coordinator.hass.states.get.return_value = SimpleNamespace(
+        state="rainy", attributes={}
+    )
+    hours = _run(coordinator._async_forecast_hours())
+
+    assert len(hours) == 1
+    assert hours[0].precipitation_mm == 0.3
+    assert coordinator.forecast_available is True
+    coordinator.hass.services.async_call.assert_awaited_once()
+
+
+def test_unknown_condition_does_not_block_a_valid_forecast() -> None:
+    """Weather availability is independent of the current condition value."""
+    entity = "weather.home"
+    coordinator = _forecast_coordinator(
+        entity,
+        _forecast_response(
+            entity,
+            [{
+                "datetime": "2026-10-01T15:00:00+00:00",
+                "precipitation": 0.3,
+                "precipitation_probability": 59,
+            }],
+        ),
+    )
+    coordinator.hass.states.get.return_value = SimpleNamespace(
+        state="unknown", attributes={"restored": False}
+    )
+
+    hours = _run(coordinator._async_forecast_hours())
+
+    assert len(hours) == 1
+    assert hours[0].precipitation_mm == 0.3
+    assert coordinator.forecast_available is True
+    coordinator.hass.services.async_call.assert_awaited_once()
 
 
 def test_a_failing_weather_entity_does_not_break_the_radar_update() -> None:
