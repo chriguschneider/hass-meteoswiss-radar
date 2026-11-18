@@ -39,6 +39,16 @@ The card loads the grey pixel map tiles straight from `wmts.geo.admin.ch`
 in the browser (no proxy, no key). URL and attribution: `FORMAT.md`,
 *Basemap* and *Attribution*.
 
+## Open-Meteo geocoding (editor only, ADR-0012)
+
+The card editor's Location panel looks up a typed place name on the Search
+button only: `GET https://geocoding-api.open-meteo.com/v1/search?name=<q>&count=10&language=<lang>&format=json`,
+straight from the browser (no proxy, no key). Response fields used:
+`results[].name`, `admin1`, `country`, `latitude`, `longitude`; `results`
+is absent when nothing matches. Docs:
+<https://open-meteo.com/en/docs/geocoding-api>. Data: GeoNames, CC BY 4.0,
+credited in the editor. The card never calls it at runtime.
+
 ## Home Assistant weather entity (ADR-0010)
 
 `next_rain` beyond the radar horizon reads a user-chosen weather entity

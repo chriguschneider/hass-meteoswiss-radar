@@ -587,6 +587,16 @@ const PLAY_SVG =
 const PAUSE_SVG =
   '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/></svg>';
 
+// HA home location as [lat, lon], or null when HA has none. Missing values
+// must not become [0, 0] (a marker in the Gulf of Guinea, weather-station-card#413).
+function homeLatLng(hass) {
+  const lat = hass?.config?.latitude;
+  const lon = hass?.config?.longitude;
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return [lat, lon];
+}
+
 class MeteoSwissRadarCard extends HTMLElement {
   constructor() {
     super();
@@ -684,6 +694,7 @@ class MeteoSwissRadarCard extends HTMLElement {
     // back on so the (previously skipped) rows are populated.
     if (timeAxis && prev.time_axis === false) this._buildTimelineLabels();
     if (c.large_label !== prev.large_label) this._updateLabel();
+    this._applyViewInPlace(c, prev);
     this._applyLayerConfigInPlace(c);
     // Re-register the product count if overlay layers were toggled so the cache
     // byte/key budget stays accurate (issue #139).
@@ -702,6 +713,18 @@ class MeteoSwissRadarCard extends HTMLElement {
     if (this._dataReady && span(c) !== span(prev)) {
       this._refreshManifest(true).catch(() => {});
     }
+  }
+
+  // Re-centre the live map when the editor changes `center` or `zoom` (the
+  // Location panel's marker drag fires this per move), without rebuilding the
+  // map or reloading frames. A removed `center` goes back to the HA home.
+  _applyViewInPlace(c, prev) {
+    if (!this._map) return;
+    const centerChanged = String(c.center) !== String(prev.center);
+    if (!centerChanged && Number(c.zoom) === Number(prev.zoom)) return;
+    const center = c.center || homeLatLng(this._hass);
+    if (center) this._map.setView(center, c.zoom);
+    else this._map.setZoom(c.zoom);
   }
 
   // Create/remove overlay and lightning layers on the live map so editor chip
@@ -2058,7 +2081,28 @@ const EDITOR_LABELS = {
   time_axis: "Time labels",
   large_label: "Large time label",
   ...Object.fromEntries(OVERLAYS.map(o => [o.cfgKey, `${o.label} overlay`])),
+  use_other_location: "Use another location",
+  query: "Place",
+  location: "",
 };
+
+// Location panel (issue #261), same pattern as weather-station-card's.
+// Editor-only: the card itself never calls the geocoder (ADR-0012).
+const LOCATION_TEXT = {
+  title: "Location",
+  home: "Home, as set in Home Assistant",
+  homeUnset: "not set",
+  search: "Search",
+  searching: "Searching…",
+  noResult: "No place found. Try another spelling or set the point on the map.",
+  error: "Place search failed. Try again, or set the point on the map.",
+  attribution: "Place search: Open-Meteo (GeoNames data, CC BY 4.0).",
+};
+
+// https://open-meteo.com/en/docs/geocoding-api: GET, no key, CORS-enabled;
+// `results` (absent when nothing matches) carries name, admin1, country,
+// latitude, longitude.
+const GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 
 // Generate editor defaults from OVERLAYS: all layers start disabled.
 const EDITOR_DEFAULTS = {
@@ -2184,6 +2228,7 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (this._forms) for (const f of this._forms) f.hass = hass;
+    this._updateLocation();
   }
 
   connectedCallback() {
@@ -2265,55 +2310,275 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
         background: var(--primary-color, #03a9f4); color: #fff;
         border-color: var(--primary-color, #03a9f4);
       }
+      .msr-note { font-size: 12px; color: var(--secondary-text-color); }
+      .msr-home { font-size: 13px; margin-bottom: 8px; }
+      .msr-search { display: flex; align-items: flex-end; gap: 8px; }
+      .msr-search ha-form { flex: 1; min-width: 0; }
+      .msr-search .msr-chip { margin-bottom: 8px; }
+      .msr-results { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
+      .msr-results .msr-chip { text-align: left; border-radius: 8px; line-height: 1.3; }
+      .msr-status { margin: 4px 0 8px; }
+      .msr-status:empty { display: none; }
+      .msr-attrib { margin-top: 10px; }
     `;
     this.appendChild(style);
+
+    this.appendChild(this._makeLocationPanel());
 
     const basics = this._makeForm(BASICS_SCHEMA);
     basics.classList.add("msr-basics");
     this.appendChild(basics);
 
     for (const def of EDITOR_SECTIONS) {
-      const panel = document.createElement("ha-expansion-panel");
-      panel.className = "msr-panel";
-      panel.outlined = true;
-
-      const head = document.createElement("div");
-      head.slot = "header";
-      head.className = "msr-head";
-      const icon = document.createElement("ha-icon");
-      icon.icon = def.icon;
-      const titles = document.createElement("div");
-      titles.className = "msr-titles";
-      const title = document.createElement("div");
-      title.className = "msr-title";
-      title.textContent = def.title;
-      const summary = document.createElement("div");
-      summary.className = "msr-summary";
-      titles.appendChild(title);
-      titles.appendChild(summary);
-      this._summaryEls[def.key] = summary;
-      const reset = document.createElement("ha-icon-button");
-      reset.title = "Reset section to defaults";
-      const resetIcon = document.createElement("ha-icon");
-      resetIcon.icon = "mdi:restore";
-      reset.appendChild(resetIcon);
-      reset.addEventListener("click", (ev) => {
-        ev.stopPropagation(); // the header itself toggles the panel
-        this._resetSection(def);
-      });
-      head.appendChild(icon);
-      head.appendChild(titles);
-      head.appendChild(reset);
-      panel.appendChild(head);
-
-      const body = document.createElement("div");
-      body.className = "msr-body";
+      const { panel, body } = this._makePanel(def, () => this._resetSection(def));
       body.appendChild(
         def.chips ? this._makeChips(def) : this._makeForm(def.schema, def)
       );
-      panel.appendChild(body);
       this.appendChild(panel);
-      panel.expanded = true;
+    }
+    this._updateLocation();
+  }
+
+  // An expansion panel whose header carries the icon, the title, the
+  // one-line summary (stored in _summaryEls[def.key]) and a reset button.
+  _makePanel(def, onReset) {
+    const panel = document.createElement("ha-expansion-panel");
+    panel.className = "msr-panel";
+    panel.outlined = true;
+
+    const head = document.createElement("div");
+    head.slot = "header";
+    head.className = "msr-head";
+    const icon = document.createElement("ha-icon");
+    icon.icon = def.icon;
+    const titles = document.createElement("div");
+    titles.className = "msr-titles";
+    const title = document.createElement("div");
+    title.className = "msr-title";
+    title.textContent = def.title;
+    const summary = document.createElement("div");
+    summary.className = "msr-summary";
+    titles.appendChild(title);
+    titles.appendChild(summary);
+    this._summaryEls[def.key] = summary;
+    const reset = document.createElement("ha-icon-button");
+    reset.title = "Reset section to defaults";
+    const resetIcon = document.createElement("ha-icon");
+    resetIcon.icon = "mdi:restore";
+    reset.appendChild(resetIcon);
+    reset.addEventListener("click", (ev) => {
+      ev.stopPropagation(); // the header itself toggles the panel
+      onReset();
+    });
+    head.appendChild(icon);
+    head.appendChild(titles);
+    head.appendChild(reset);
+    panel.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "msr-body";
+    panel.appendChild(body);
+    panel.expanded = true;
+    return { panel, body };
+  }
+
+  /* ---------- Location panel (issue #261) ----------
+   * The switch, not the map, decides whether `center` exists: off removes
+   * it, on presets it to the HA home. _locOther keeps the fields open when
+   * the switch is on but HA has no home to preset (nothing is written then).
+   * The place search runs on the Search button only. */
+
+  _makeLocationPanel() {
+    const def = { key: "location", icon: "mdi:map-marker", title: LOCATION_TEXT.title };
+    const { panel, body } = this._makePanel(def, () => this._setUseOther(false));
+    this._locPanel = panel;
+
+    this._locHomeEl = document.createElement("div");
+    this._locHomeEl.className = "msr-home";
+    body.appendChild(this._locHomeEl);
+
+    this._locSwitchForm = this._makeLocalForm(
+      [{ name: "use_other_location", selector: { boolean: {} } }],
+      (value) => this._setUseOther(value.use_other_location === true),
+    );
+    body.appendChild(this._locSwitchForm);
+
+    const fields = document.createElement("div");
+    this._locFieldsEl = fields;
+
+    const search = document.createElement("div");
+    search.className = "msr-search";
+    this._locQuery = "";
+    // Typing only remembers the text; no request until Search is clicked.
+    this._locQueryForm = this._makeLocalForm(
+      [{ name: "query", selector: { text: {} } }],
+      (value) => {
+        this._locQuery = value.query == null ? "" : String(value.query);
+        this._locQueryForm.data = { query: this._locQuery };
+      },
+    );
+    this._locQueryForm.data = { query: "" };
+    search.appendChild(this._locQueryForm);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "msr-chip";
+    btn.textContent = LOCATION_TEXT.search;
+    btn.addEventListener("click", () => {
+      this._searchPlace().catch(() => {});
+    });
+    this._locSearchBtn = btn;
+    search.appendChild(btn);
+    fields.appendChild(search);
+
+    this._locStatusEl = document.createElement("div");
+    this._locStatusEl.className = "msr-note msr-status";
+    fields.appendChild(this._locStatusEl);
+    this._locResultsEl = document.createElement("div");
+    this._locResultsEl.className = "msr-results";
+    fields.appendChild(this._locResultsEl);
+
+    this._locMapForm = this._makeLocalForm(
+      [{ name: "location", selector: { location: {} } }],
+      (value) => {
+        const loc = value.location;
+        const lat = Number(loc?.latitude);
+        const lon = Number(loc?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        this._setCenter([lat, lon]);
+      },
+    );
+    fields.appendChild(this._locMapForm);
+    body.appendChild(fields);
+
+    const attrib = document.createElement("div");
+    attrib.className = "msr-note msr-attrib";
+    attrib.textContent = LOCATION_TEXT.attribution;
+    body.appendChild(attrib);
+    return panel;
+  }
+
+  // An ha-form outside the shared config forms: its value is panel state,
+  // not a config fragment, so it gets its own handler and data.
+  _makeLocalForm(schema, onValue) {
+    const form = document.createElement("ha-form");
+    form.computeLabel = (item) => EDITOR_LABELS[item.name] ?? item.name;
+    form.schema = schema;
+    if (this._hass) form.hass = this._hass;
+    form.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      onValue(ev.detail?.value || {});
+    });
+    return form;
+  }
+
+  _useOther() {
+    return Array.isArray(this._config?.center) || this._locOther === true;
+  }
+
+  _setUseOther(on) {
+    const config = { ...this._config };
+    this._locOther = on;
+    this._clearSearch();
+    if (!on) {
+      delete config.center;
+    } else if (!Array.isArray(config.center)) {
+      const home = homeLatLng(this._hass);
+      if (home) config.center = home;
+    }
+    this._emit(config);
+  }
+
+  _setCenter(center) {
+    this._locOther = true;
+    this._emit({ ...this._config, center });
+  }
+
+  _clearSearch() {
+    this._locSearchSeq = (this._locSearchSeq || 0) + 1; // drop in-flight answers
+    this._locBusy = false;
+    if (this._locStatusEl) this._locStatusEl.textContent = "";
+    if (this._locResultsEl) this._locResultsEl.textContent = "";
+  }
+
+  async _searchPlace() {
+    const q = String(this._locQuery || "").trim();
+    if (!q || this._locBusy) return;
+    const seq = (this._locSearchSeq || 0) + 1;
+    this._locSearchSeq = seq;
+    this._locBusy = true;
+    this._locResultsEl.textContent = "";
+    this._locStatusEl.textContent = "";
+    this._updateLocation();
+    const lang = this._hass?.locale?.language || this._hass?.language || "en";
+    const url =
+      `${GEOCODING_URL}?name=${encodeURIComponent(q)}&count=10` +
+      `&language=${encodeURIComponent(lang)}&format=json`;
+    let results;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      results = Array.isArray(data?.results) ? data.results : [];
+    } catch {
+      if (seq !== this._locSearchSeq) return;
+      this._locBusy = false;
+      this._locStatusEl.textContent = LOCATION_TEXT.error;
+      this._updateLocation();
+      return;
+    }
+    if (seq !== this._locSearchSeq) return;
+    this._locBusy = false;
+    const places = results.filter(
+      (r) => Number.isFinite(Number(r?.latitude)) && Number.isFinite(Number(r?.longitude)),
+    );
+    this._locStatusEl.textContent = places.length ? "" : LOCATION_TEXT.noResult;
+    for (const place of places) {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "msr-chip";
+      // Upstream text: textContent only, never innerHTML.
+      el.textContent = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
+      el.addEventListener("click", () => {
+        this._clearSearch();
+        this._setCenter([Number(place.latitude), Number(place.longitude)]);
+      });
+      this._locResultsEl.appendChild(el);
+    }
+    this._updateLocation();
+  }
+
+  _locationSummary() {
+    const c = this._config?.center;
+    if (Array.isArray(c) && c.length === 2) {
+      return `${Number(c[0]).toFixed(2)}, ${Number(c[1]).toFixed(2)}`;
+    }
+    const name = this._hass?.config?.location_name;
+    return name ? `Home · ${name}` : "Home";
+  }
+
+  _updateLocation() {
+    if (!this._locPanel) return;
+    const home = homeLatLng(this._hass);
+    const name = this._hass?.config?.location_name;
+    const where = home ? `${home[0].toFixed(2)}, ${home[1].toFixed(2)}` : LOCATION_TEXT.homeUnset;
+    this._locHomeEl.textContent =
+      `${LOCATION_TEXT.home}: ${name ? `${name} · ` : ""}${where}`;
+    const on = this._useOther();
+    this._locSwitchForm.data = { use_other_location: on };
+    this._locFieldsEl.hidden = !on;
+    const c = this._config?.center;
+    this._locMapForm.data = Array.isArray(c) && c.length === 2
+      ? { location: { latitude: Number(c[0]), longitude: Number(c[1]) } }
+      : {};
+    this._locSearchBtn.disabled = this._locBusy === true;
+    this._locSearchBtn.textContent = this._locBusy ? LOCATION_TEXT.searching : LOCATION_TEXT.search;
+    if (this._hass) {
+      for (const f of [this._locSwitchForm, this._locQueryForm, this._locMapForm]) {
+        f.hass = this._hass;
+      }
+    }
+    if (this._summaryEls?.location) {
+      this._summaryEls.location.textContent = this._locationSummary();
     }
   }
 
@@ -2348,6 +2613,7 @@ class MeteoSwissRadarCardEditor extends HTMLElement {
   }
 
   _updateForms() {
+    this._updateLocation();
     if (!this._forms) return;
     const data = this._data();
     for (const form of this._forms) {
