@@ -14,6 +14,13 @@ the two existing tags (`0.7.6`, `0.8.0`) keep their original form.
   search and a map, like in Weather Station Card. *Frontend only (browser
   reload).*
 
+### Fixed
+
+- Defer hourly weather forecasts while the configured source is missing,
+  unavailable or still starting. This avoids repeated missing-target warnings
+  and resumes forecasts on the next normal refresh once the source is ready.
+  Requires restart
+
 ## [v0.17.0] — 2026-10-27
 
 ### Added

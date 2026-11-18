@@ -205,6 +205,22 @@ class MeteoSwissRadarNowcastCoordinator(DataUpdateCoordinator[RainNowcast]):
             self.forecast_available = None
             return None
 
+        # HA logs invalid service targets before raising an exception. A weather
+        # integration may still be starting; retry on the next normal refresh.
+        weather_state = self.hass.states.get(self._weather_entity_id)
+        if (
+            not self.hass.services.has_service("weather", "get_forecasts")
+            or weather_state is None
+            or weather_state.state == "unavailable"
+            or weather_state.attributes.get("restored")
+        ):
+            _LOGGER.debug(
+                "Hourly forecast from %s unavailable: weather source not ready",
+                self._weather_entity_id,
+            )
+            self.forecast_available = False
+            return None
+
         try:
             response = await self.hass.services.async_call(
                 "weather",
